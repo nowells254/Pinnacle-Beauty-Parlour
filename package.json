@@ -1,0 +1,16 @@
+{
+  "name": "pinnacle-beautyparlour",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Full-stack salon booking and management application for Pinnacle BeautyParlour",
+  "main": "server.js",
+  "scripts": {"start":"node server.js", "dev":"node --watch server.js", "check":"node --check server.js && node --check public/app.js"},
+  "engines": {"node": ">=20"},
+  "dependencies": {
+    "compression": "^1.7.4",
+    "express": "^4.21.2",
+    "express-rate-limit": "^7.5.0",
+    "helmet": "^8.0.0",
+    "pg": "^8.13.1"
+  }
+}

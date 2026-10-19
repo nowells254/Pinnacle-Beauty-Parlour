@@ -1,0 +1,35 @@
+services:
+  - type: web
+    name: pinnacle-beautyparlour
+    runtime: node
+    plan: starter
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: pinnacle-beautyparlour-db
+          property: connectionString
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: SALON_NAME
+        value: Pinnacle BeautyParlour
+      - key: SALON_WHATSAPP
+        sync: false
+      - key: SALON_CURRENCY
+        value: KSh
+      - key: TIME_ZONE
+        value: Africa/Nairobi
+
+databases:
+  - name: pinnacle-beautyparlour-db
+    plan: basic-256mb
+    databaseName: pinnacle_beauty
+    user: pinnacle_owner
