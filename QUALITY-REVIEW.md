@@ -1,6 +1,6 @@
 # Pinnacle BeautyParlour — quality and launch review
 
-Review date: 2026-10-19
+Review date: 2026-10-19 (updated 2026-10-20)
 
 ## Current product scope
 
@@ -55,3 +55,27 @@ Platforms such as Fresha advertise live calendars, team/staff scheduling, custom
 - Added search and category filtering to the public service catalogue and selected-service price/duration information in the booking form.
 - Added visible failure messaging and disabled the booking selector when the API cannot load the service menu, rather than leaving a misleading blank/working-looking dropdown.
 - JavaScript syntax checks pass. Live database migration, browser UX, booking, concurrency, and end-to-end tests still require execution in a configured staging environment.
+
+## Follow-up review (2026-10-20)
+
+### Strengths confirmed
+- Clean, compact Express + PostgreSQL architecture with parameterized queries.
+- Proper advisory lock + transaction for booking concurrency.
+- Timing-safe password comparison and HttpOnly + SameSite=strict session cookie.
+- Rate limiting on login and booking endpoints.
+- 100 pre-seeded services with categories, search/filter UI, and server-side availability.
+- Render Blueprint ready; health endpoint present.
+- Frontend escapes output; PWA shell caching excludes API routes.
+
+### Small improvements applied
+- Added composite indexes on `bookings(status, appointment_date)` and `services(active, category)` for faster availability and menu queries.
+- Cleaned legacy category migration (categories already correctly set by the seed data).
+- Made closed-days parsing more defensive (filter out NaN values).
+
+### Remaining recommendations before real customers
+1. Deploy to Render staging and perform a full booking + owner-dashboard test from two devices.
+2. Replace sample prices/durations with the salon’s real ones.
+3. Set strong unique `ADMIN_PASSWORD` and correct WhatsApp number.
+4. Confirm database backup retention on Render.
+5. Consider CAPTCHA or stronger bot protection only if booking spam appears.
+6. Future: staff accounts, automated WhatsApp/SMS confirmations, and M-Pesa (only after full payment-provider integration).

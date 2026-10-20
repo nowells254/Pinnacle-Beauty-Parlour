@@ -158,9 +158,12 @@ async function initDb() {
     id TEXT PRIMARY KEY, customer_name TEXT NOT NULL, phone TEXT NOT NULL, service_id TEXT NOT NULL REFERENCES services(id) ON UPDATE CASCADE, service_name TEXT NOT NULL, price INTEGER NOT NULL, duration INTEGER NOT NULL, appointment_date DATE NOT NULL, appointment_time TIME NOT NULL, notes TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'Requested' CHECK(status IN ('Requested','Confirmed','Completed','Cancelled')), created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
   await pool.query(`CREATE INDEX IF NOT EXISTS bookings_date_idx ON bookings(appointment_date, appointment_time)`);
   await pool.query(`CREATE INDEX IF NOT EXISTS bookings_created_idx ON bookings(created_at DESC)`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS bookings_status_date_idx ON bookings(status, appointment_date)`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS services_active_category_idx ON services(active, category)`);
   await pool.query(`CREATE TABLE IF NOT EXISTS salon_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
   for (const s of defaultServices) await pool.query('INSERT INTO services(id,category,name,description,price,duration,icon,active) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(id) DO NOTHING',s);
-  await pool.query("UPDATE services SET category=CASE id WHEN 'hair' THEN 'Hair styling' WHEN 'braids' THEN 'Braids & twists' WHEN 'nails' THEN 'Nails' WHEN 'facial' THEN 'Facials & skincare' WHEN 'makeup' THEN 'Makeup' WHEN 'treatment' THEN 'Hair treatments' ELSE category END WHERE id IN ('hair','braids','nails','facial','makeup','treatment')");
+  // Categories are set correctly on first insert from defaultServices.
+  await pool.query("UPDATE services SET category = COALESCE(NULLIF(category, ''), 'Other') WHERE category IS NULL OR category = ''");
   const settings = [['salon_name',salon.name],['whatsapp',salon.whatsapp],['opening_time','09:00'],['closing_time','18:00'],['slot_interval','30'],['closed_days','0']];
   for (const [k,v] of settings) await pool.query('INSERT INTO salon_settings(key,value) VALUES($1,$2) ON CONFLICT(key) DO NOTHING',[k,v]);
 }
@@ -189,8 +192,13 @@ app.post('/api/bookings', bookingLimiter, asyncRoute(async(req,res)=>{
     if(!sr.rowCount){await client.query('ROLLBACK');return res.status(400).json({error:'That service is no longer available. Refresh and choose another.'});}
     const svc=sr.rows[0];
     const setR=await client.query("SELECT key,value FROM salon_settings WHERE key IN ('opening_time','closing_time','closed_days','slot_interval')"); const sets=Object.fromEntries(setR.rows.map(x=>[x.key,x.value]));
-    const day=new Date(`${date}T12:00:00Z`).getUTCDay(); const closed=(sets.closed_days||'').split(',').map(Number);
-    if(closed.includes(day)){await client.query('ROLLBACK');return res.status(400).json({error:'The salon is closed on this day. Please choose another date.'});}
+    // Noon UTC keeps the calendar date stable. For Kenya (Africa/Nairobi) this matches the local weekday.
+    const day = new Date(`${date}T12:00:00Z`).getUTCDay();
+    const closed = (sets.closed_days || '').split(',').map(Number).filter(n => !Number.isNaN(n));
+    if (closed.includes(day)) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'The salon is closed on this day. Please choose another date.' });
+    }
     const toMins=t=>{const [h,m]=t.split(':').map(Number);return h*60+m;};
     const start=toMins(time), open=toMins(sets.opening_time||'09:00'), close=toMins(sets.closing_time||'18:00');
     if(start<open || start+Number(svc.duration)>close){await client.query('ROLLBACK');return res.status(400).json({error:`Choose a time between ${sets.opening_time||'09:00'} and ${sets.closing_time||'18:00'} that allows the full service.`});}
@@ -207,7 +215,9 @@ app.get('/api/availability',asyncRoute(async(req,res)=>{
   const todayParts=Object.fromEntries(new Intl.DateTimeFormat('en-CA',{timeZone:salon.timeZone,year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date()).map(x=>[x.type,x.value]));const today=`${todayParts.year}-${todayParts.month}-${todayParts.day}`;if(date<today)return res.json({slots:[],closed:false});
   const sr=await pool.query('SELECT duration FROM services WHERE id=$1 AND active=TRUE',[serviceId]);if(!sr.rowCount)return res.status(400).json({error:'Choose a service.'});
   const rr=await pool.query("SELECT key,value FROM salon_settings WHERE key IN ('opening_time','closing_time','slot_interval','closed_days')");const s=Object.fromEntries(rr.rows.map(x=>[x.key,x.value]));
-  const day=new Date(`${date}T12:00:00Z`).getUTCDay();if((s.closed_days||'').split(',').map(Number).includes(day))return res.json({slots:[],closed:true});
+  const day=new Date(`${date}T12:00:00Z`).getUTCDay();
+  const closedDays=(s.closed_days||'').split(',').map(Number).filter(n=>!Number.isNaN(n));
+  if(closedDays.includes(day))return res.json({slots:[],closed:true});
   const mins=t=>{const [h,m]=t.split(':').map(Number);return h*60+m;}, fmt=n=>String(Math.floor(n/60)).padStart(2,'0')+':'+String(n%60).padStart(2,'0');
   const open=mins(s.opening_time||'09:00'),close=mins(s.closing_time||'18:00'),step=Math.max(5,Number(s.slot_interval)||30),duration=Number(sr.rows[0].duration);
   const booked=await pool.query("SELECT appointment_time::text AS time,duration FROM bookings WHERE appointment_date=$1 AND status IN ('Requested','Confirmed')",[date]);
