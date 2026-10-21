@@ -101,7 +101,19 @@ nav a:hover, .text-link:hover { color: var(--rose); }
 
 .site-footer { padding: 28px 8%; text-align: center; color: var(--muted); font-size: .9rem; border-top: 1px solid var(--line); }
 
-.modal { position: fixed; inset: 0; background: #2e252b66; display: grid; place-items: center; z-index: 50; padding: 16px; overflow-y: auto; }
+.modal {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: #2e252b66;
+  place-items: center;
+  z-index: 50;
+  padding: 16px;
+  overflow-y: auto;
+}
+.modal:not(.hidden) {
+  display: grid;
+}
 .modal-card { background: #fff; border-radius: 18px; padding: 28px; width: min(440px, 100%); position: relative; max-height: 90vh; overflow-y: auto; }
 .modal-wide { width: min(720px, 100%); }
 .modal-close { position: absolute; top: 12px; right: 14px; border: 0; background: none; font-size: 28px; cursor: pointer; color: var(--muted); line-height: 1; }
