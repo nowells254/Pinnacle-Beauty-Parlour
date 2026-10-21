@@ -19,6 +19,7 @@ async function api(url, opts = {}) {
 
 function toast(s) {
   const t = $('#toast');
+  if (!t) return;
   t.textContent = s;
   t.classList.add('show');
   clearTimeout(toastTimer);
@@ -643,7 +644,8 @@ function bindEvents() {
   $('#year').textContent = new Date().getFullYear();
 }
 
-// Boot
+// Boot - force all modals closed on load
+document.querySelectorAll('.modal').forEach(m => m.classList.add('hidden'));
 bindEvents();
 checkAuth()
   .then(() => loadPublic())
