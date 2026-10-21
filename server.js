@@ -267,6 +267,8 @@ async function initDb() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )`);
+  // Migrate older databases that lack user_id
+  await pool.query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS user_id TEXT REFERENCES users(id) ON DELETE SET NULL`);
   await pool.query(`CREATE INDEX IF NOT EXISTS bookings_date_idx ON bookings(appointment_date, appointment_time)`);
   await pool.query(`CREATE INDEX IF NOT EXISTS bookings_status_date_idx ON bookings(status, appointment_date)`);
   await pool.query(`CREATE INDEX IF NOT EXISTS bookings_user_idx ON bookings(user_id)`);
