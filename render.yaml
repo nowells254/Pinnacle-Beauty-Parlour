@@ -2,7 +2,7 @@ services:
   - type: web
     name: pinnacle-beautyparlour
     runtime: node
-    plan: starter
+    plan: free
     buildCommand: npm install
     startCommand: npm start
     healthCheckPath: /health
@@ -30,6 +30,6 @@ services:
 
 databases:
   - name: pinnacle-beautyparlour-db
-    plan: basic-256mb
+    plan: free
     databaseName: pinnacle_beauty
     user: pinnacle_owner
