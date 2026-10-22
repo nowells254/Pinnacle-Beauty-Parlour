@@ -211,7 +211,7 @@ function openDash() {
   $('#dashTitle').textContent = user.role === 'admin' ? 'Owner Dashboard' : 'My Account';
   $('#dashUser').textContent = `${user.fullName || user.email} · ${user.role}`;
   renderDashTabs();
-  loadDashTab(user.role === 'admin' ? 'bookings' : 'mybookings');
+  loadDashTab(user.role === 'admin' ? 'overview' : 'mybookings');
 }
 
 function closeDash() { stopMsgPoll(); $('#dashModal').classList.add('hidden'); }
@@ -220,9 +220,13 @@ function renderDashTabs() {
   const tabs = $('#dashTabs');
   if (user.role === 'admin') {
     tabs.innerHTML = `
-      <button class="dash-tab active" data-tab="bookings">Bookings</button>
+      <button class="dash-tab active" data-tab="overview">Overview</button>
+      <button class="dash-tab" data-tab="bookings">Bookings</button>
       <button class="dash-tab" data-tab="services">Services</button>
       <button class="dash-tab" data-tab="messages">Messages</button>
+      <button class="dash-tab" data-tab="gallery">Gallery</button>
+      <button class="dash-tab" data-tab="reviews">Reviews</button>
+      <button class="dash-tab" data-tab="staff">Staff</button>
       <button class="dash-tab" data-tab="settings">Settings</button>
       <button class="dash-tab" data-tab="profile">Profile</button>
       <button class="dash-tab" data-tab="clients">Clients</button>`;
@@ -230,6 +234,7 @@ function renderDashTabs() {
     tabs.innerHTML = `
       <button class="dash-tab active" data-tab="mybookings">My bookings</button>
       <button class="dash-tab" data-tab="messages">Messages</button>
+      <button class="dash-tab" data-tab="review">Leave review</button>
       <button class="dash-tab" data-tab="profile">Profile</button>`;
   }
   tabs.querySelectorAll('.dash-tab').forEach(b => {
@@ -244,13 +249,18 @@ async function loadDashTab(tab) {
   const host = $('#dashContent');
   host.innerHTML = '<div class="loading">Loading…</div>';
   try {
-    if (tab === 'bookings') await renderAdminBookings(host);
+    if (tab === 'overview') await renderOverview(host);
+    else if (tab === 'bookings') await renderAdminBookings(host);
     else if (tab === 'mybookings') await renderMyBookings(host);
     else if (tab === 'services') await renderAdminServices(host);
     else if (tab === 'messages') await renderMessages(host);
+    else if (tab === 'gallery') await renderAdminGallery(host);
+    else if (tab === 'reviews') await renderAdminReviews(host);
+    else if (tab === 'staff') await renderStaff(host);
     else if (tab === 'settings') await renderSettings(host);
     else if (tab === 'profile') await renderProfile(host);
     else if (tab === 'clients') await renderClients(host);
+    else if (tab === 'review') await renderClientReview(host);
   } catch (e) {
     host.innerHTML = `<div class="empty">${esc(e.message)}</div>`;
   }
