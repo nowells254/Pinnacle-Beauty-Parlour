@@ -7,6 +7,9 @@ let services = [];
 let config = { name: 'Pinnacle BeautyParlour', currency: 'KSh', timeZone: 'Africa/Nairobi', whatsapp: '' };
 let user = null;
 let toastTimer;
+let msgPollTimer = null;
+let replyTarget = null;
+let lastMsgCount = 0;
 
 async function api(url, opts = {}) {
   const headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) };
@@ -211,7 +214,7 @@ function openDash() {
   loadDashTab(user.role === 'admin' ? 'bookings' : 'mybookings');
 }
 
-function closeDash() { $('#dashModal').classList.add('hidden'); }
+function closeDash() { stopMsgPoll(); $('#dashModal').classList.add('hidden'); }
 
 function renderDashTabs() {
   const tabs = $('#dashTabs');
@@ -398,60 +401,174 @@ async function renderAdminServices(host) {
   });
 }
 
+function stopMsgPoll() {
+  if (msgPollTimer) { clearInterval(msgPollTimer); msgPollTimer = null; }
+}
+
+function updateMsgBadge(count) {
+  document.querySelectorAll('.dash-tab[data-tab="messages"]').forEach(t => {
+    t.innerHTML = count > 0 ? `Messages <span class="msg-badge">${count}</span>` : 'Messages';
+  });
+  const btn = $('#authBtn');
+  if (btn && user) {
+    const label = user.role === 'admin' ? 'Owner dashboard' : 'My account';
+    btn.textContent = count > 0 ? `${label} (${count})` : label;
+  }
+}
+
 async function renderMessages(host) {
-  const rows = await api('/api/messages');
+  stopMsgPoll();
   const isAdmin = user.role === 'admin';
   host.innerHTML = `
-    <div class="msg-list">
-      ${rows.length ? rows.map(m => `
-        <div class="msg-item">
-          <div class="meta">${esc(m.sender_role)} · ${new Date(m.created_at).toLocaleString()} ${m.from_name ? '· ' + esc(m.from_name) : ''}</div>
-          <div>${esc(m.body)}</div>
-        </div>`).join('') : '<div class="empty">No messages yet.</div>'}
-    </div>
-    <div class="msg-compose">
-      ${isAdmin ? `<label>Reply to client ID<input id="msgToUser" placeholder="Client user ID"></label>` : ''}
-      <label>Message<textarea id="msgBody" rows="3" placeholder="Type your message…"></textarea></label>
-      <button class="btn btn-primary btn-sm" id="sendMsg">Send</button>
+    <div class="chat-wrap">
+      <div class="msg-list" id="msgList"><div class="loading">Loading chat…</div></div>
+      <div class="msg-compose">
+        <div id="replyBar" class="reply-bar hidden">
+          <span id="replyLabel"></span>
+          <button type="button" id="clearReply" class="reply-clear" title="Cancel">×</button>
+        </div>
+        <textarea id="msgBody" rows="2" placeholder="${isAdmin ? 'Click Reply on a client message, then type…' : 'Type a message to the salon…'}"></textarea>
+        <button class="btn btn-primary btn-sm" id="sendMsg">Send</button>
+      </div>
     </div>`;
+
+  async function paint() {
+    const list = $('#msgList');
+    if (!list) return;
+    try {
+      const rows = await api('/api/messages');
+      const wasAtBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 80;
+      if (!rows.length) {
+        list.innerHTML = '<div class="empty">No messages yet.</div>';
+      } else {
+        list.innerHTML = rows.map(m => {
+          const mine = m.from_user_id === user.id || (isAdmin && m.sender_role === 'admin');
+          const name = m.from_name || (m.sender_role === 'admin' ? 'Salon' : 'Client');
+          const time = new Date(m.created_at).toLocaleString();
+          const replyBtn = (isAdmin && m.sender_role === 'client' && m.from_user_id)
+            ? `<button type="button" class="msg-reply" data-uid="${esc(m.from_user_id)}" data-name="${esc(name)}">Reply</button>`
+            : '';
+          return `<div class="msg-row ${mine ? 'mine' : 'theirs'}"><div class="msg-bubble"><div class="meta">${esc(name)} · ${esc(time)}</div><div class="msg-text">${esc(m.body)}</div>${replyBtn}</div></div>`;
+        }).join('');
+      }
+      if (wasAtBottom || rows.length !== lastMsgCount) list.scrollTop = list.scrollHeight;
+      lastMsgCount = rows.length;
+    } catch (e) {
+      list.innerHTML = `<div class="empty">${esc(e.message)}</div>`;
+    }
+  }
+
+  function setReply(id, name) {
+    replyTarget = { id, name };
+    const bar = $('#replyBar'), label = $('#replyLabel');
+    if (bar && label) { label.textContent = 'Replying to ' + name; bar.classList.remove('hidden'); }
+    $('#msgBody')?.focus();
+  }
+  function clearReply() {
+    replyTarget = null;
+    $('#replyBar')?.classList.add('hidden');
+  }
+
+  host.querySelector('#clearReply')?.addEventListener('click', clearReply);
+  host.addEventListener('click', e => {
+    const btn = e.target.closest('.msg-reply');
+    if (btn) setReply(btn.dataset.uid, btn.dataset.name);
+  });
+
   $('#sendMsg')?.addEventListener('click', async () => {
     const body = $('#msgBody').value.trim();
     if (!body) return toast('Message is empty');
     try {
       const payload = { body };
       if (isAdmin) {
-        const to = $('#msgToUser')?.value.trim();
-        if (!to) return toast('Enter client user ID');
-        payload.toUserId = to;
+        if (!replyTarget?.id) return toast('Click Reply on a client message first');
+        payload.toUserId = replyTarget.id;
       }
       await api('/api/messages', { method: 'POST', body: JSON.stringify(payload) });
-      toast('Message sent');
-      loadDashTab('messages');
+      $('#msgBody').value = '';
+      await paint();
+      toast('Sent');
     } catch (e) { toast(e.message); }
   });
+
+  $('#msgBody')?.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('#sendMsg')?.click(); }
+  });
+
+  await paint();
+  try {
+    const rows = await api('/api/messages');
+    for (const m of rows) {
+      if (m.to_user_id === user.id && !m.read) {
+        api(`/api/messages/${encodeURIComponent(m.id)}/read`, { method: 'PATCH' }).catch(() => {});
+      }
+    }
+    updateMsgBadge(0);
+  } catch {}
+  msgPollTimer = setInterval(paint, 3000);
 }
 
 async function renderSettings(host) {
   const s = await api('/api/admin/settings');
+  const logoStyles = [
+    ['gradient', 'Gradient circle'],
+    ['outline', 'Outline ring'],
+    ['solid', 'Solid badge'],
+    ['minimal', 'Minimal letter'],
+    ['square', 'Rounded square'],
+    ['diamond', 'Soft diamond']
+  ];
   host.innerHTML = `
-    <form class="settings-form" id="settingsForm">
+    <form class="settings-form settings-wide" id="settingsForm">
+      <h3 class="settings-heading">Business</h3>
       <label>Salon / Business name<input name="salon_name" value="${esc(s.salon_name || '')}"></label>
-      <label>Business type<input name="business_type" value="${esc(s.business_type || 'Beauty Salon')}" placeholder="Beauty Salon, Boutique, etc."></label>
+      <label>Business type<input name="business_type" value="${esc(s.business_type || 'Beauty Salon')}" placeholder="Beauty Salon, Boutique, Spa…"></label>
       <label>Tagline<input name="tagline" value="${esc(s.tagline || '')}"></label>
       <label>WhatsApp (international digits)<input name="whatsapp" value="${esc(s.whatsapp || '')}" placeholder="2547XXXXXXXX"></label>
+
+      <h3 class="settings-heading">Hours</h3>
       <label>Opening time<input name="opening_time" value="${esc(s.opening_time || '09:00')}" placeholder="09:00"></label>
       <label>Closing time<input name="closing_time" value="${esc(s.closing_time || '18:00')}" placeholder="18:00"></label>
       <label>Slot interval (minutes)<input name="slot_interval" type="number" min="5" max="120" value="${esc(s.slot_interval || '30')}"></label>
-      <label>Closed weekdays (0=Sun … 6=Sat, comma-separated)<input name="closed_days" value="${esc(s.closed_days || '')}" placeholder="0"></label>
+      <label>Closed weekdays (0=Sun … 6=Sat)<input name="closed_days" value="${esc(s.closed_days || '')}" placeholder="0"></label>
+
+      <h3 class="settings-heading">Look & logo</h3>
+      <p class="muted">Logo letter updates automatically from your business name.</p>
+      <label>Primary colour<input name="color_primary" type="color" value="${esc(s.color_primary || '#391b31')}"></label>
+      <label>Accent colour<input name="color_accent" type="color" value="${esc(s.color_accent || '#b86e82')}"></label>
+      <label>Background colour<input name="color_cream" type="color" value="${esc(s.color_cream || '#fffaf6')}"></label>
+      <label>Logo style
+        <select name="logo_style">
+          ${logoStyles.map(([v, lab]) => `<option value="${v}" ${(s.logo_style || 'gradient') === v ? 'selected' : ''}>${lab}</option>`).join('')}
+        </select>
+      </label>
+      <div class="logo-preview-row">
+        <span class="muted">Preview</span>
+        <span class="brand-mark" id="settingsLogoPreview" data-style="${esc(s.logo_style || 'gradient')}">P</span>
+      </div>
       <button type="submit" class="btn btn-primary btn-sm">Save settings</button>
     </form>`;
+
+  const nameInput = host.querySelector('[name=salon_name]');
+  const styleSelect = host.querySelector('[name=logo_style]');
+  const preview = $('#settingsLogoPreview');
+  function refreshPreview() {
+    if (!preview) return;
+    const initials = logoInitials(nameInput?.value || config.name || 'P');
+    preview.textContent = initials;
+    preview.dataset.style = styleSelect?.value || 'gradient';
+  }
+  nameInput?.addEventListener('input', refreshPreview);
+  styleSelect?.addEventListener('change', refreshPreview);
+  refreshPreview();
+
   $('#settingsForm').addEventListener('submit', async e => {
     e.preventDefault();
     const fd = new FormData(e.target);
     const body = Object.fromEntries(fd.entries());
     try {
       await api('/api/admin/settings', { method: 'PATCH', body: JSON.stringify(body) });
-      toast('Settings saved');
+      toast('Settings saved — look updated');
       const cfg = await api('/api/config');
       config = { ...config, ...cfg };
       applyBranding();
@@ -520,19 +637,56 @@ async function renderClients(host) {
     </div>`;
 }
 
+function logoInitials(name) {
+  const parts = String(name || 'P').trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return 'P';
+  if (parts.length === 1) return parts[0].slice(0, 1).toUpperCase();
+  return (parts[0][0] + parts[1][0]).toUpperCase();
+}
+
 function applyBranding() {
-  const name = config.name || 'Pinnacle BeautyParlour';
-  $('#brandName').textContent = name.split(' ')[0] || 'Pinnacle';
-  $('#brandSub').textContent = (name.split(' ').slice(1).join(' ') || 'BEAUTY PARLOUR').toUpperCase();
+  const name = config.name || config.salon_name || 'Pinnacle BeautyParlour';
+  const parts = name.trim().split(/\s+/);
+  $('#brandName').textContent = parts[0] || 'Pinnacle';
+  $('#brandSub').textContent = (parts.slice(1).join(' ') || 'BEAUTY PARLOUR').toUpperCase();
   $('#footerName').textContent = name;
   if (config.tagline) $('#heroTagline').textContent = config.tagline;
   document.title = name;
+
+  const initials = logoInitials(name);
+  document.querySelectorAll('.brand-mark').forEach(el => {
+    el.textContent = initials;
+    el.dataset.style = config.logoStyle || 'gradient';
+  });
+  const art = document.querySelector('.art-letter');
+  if (art) art.innerHTML = initials + '<span>✦</span>';
+
+  const primary = config.colorPrimary || '#391b31';
+  const accent = config.colorAccent || '#b86e82';
+  const cream = config.colorCream || '#fffaf6';
+  const root = document.documentElement;
+  root.style.setProperty('--plum', primary);
+  root.style.setProperty('--rose', accent);
+  root.style.setProperty('--cream', cream);
+  root.style.setProperty('--pink', accent + '22');
+  root.style.setProperty('--plum2', primary);
 }
 
 async function loadPublic() {
   const [svc, cfg] = await Promise.all([api('/api/services'), api('/api/config')]);
   services = svc;
-  config = { ...config, ...cfg, name: cfg.name, currency: cfg.currency, timeZone: cfg.timeZone, whatsapp: cfg.whatsapp };
+  config = {
+    ...config,
+    ...cfg,
+    name: cfg.name,
+    currency: cfg.currency,
+    timeZone: cfg.timeZone,
+    whatsapp: cfg.whatsapp,
+    colorPrimary: cfg.colorPrimary,
+    colorAccent: cfg.colorAccent,
+    colorCream: cfg.colorCream,
+    logoStyle: cfg.logoStyle
+  };
   applyBranding();
   renderServices();
   const dateInput = $('#bookingForm [name=date]');
@@ -649,11 +803,27 @@ document.querySelectorAll('.modal').forEach(m => m.classList.add('hidden'));
 bindEvents();
 checkAuth()
   .then(() => loadPublic())
-  .then(() => { if ($('#bookingService').value) loadSlots(); })
+  .then(() => { if ($('#bookingService')?.value) loadSlots(); })
+  .then(async () => {
+    if (!user) return;
+    try {
+      const u = await api('/api/messages/unread-count');
+      updateMsgBadge(u.count);
+    } catch {}
+    setInterval(async () => {
+      if (!user) return;
+      try {
+        const u = await api('/api/messages/unread-count');
+        updateMsgBadge(u.count);
+      } catch {}
+    }, 15000);
+  })
   .catch(e => {
     $('#serviceGrid').innerHTML = `<div class="empty-state">Could not load services: ${esc(e.message)}</div>`;
-    $('#bookingService').innerHTML = '<option value="">Service menu unavailable</option>';
-    $('#bookingService').disabled = true;
+    if ($('#bookingService')) {
+      $('#bookingService').innerHTML = '<option value="">Service menu unavailable</option>';
+      $('#bookingService').disabled = true;
+    }
   });
 
 if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {

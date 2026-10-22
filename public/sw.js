@@ -1,4 +1,4 @@
-const CACHE = 'pinnacle-shell-v3';
+const CACHE = 'pinnacle-shell-v5';
 const SHELL = ['/', '/styles.css', '/app.js', '/manifest.webmanifest', '/icon-192.png', '/icon-512.png'];
 
 self.addEventListener('install', e => {

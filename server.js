@@ -308,7 +308,11 @@ async function initDb() {
     ['slot_interval', '30'],
     ['closed_days', '0'],
     ['business_type', 'Beauty Salon'],
-    ['tagline', 'Beauty, beautifully done.']
+    ['tagline', 'Beauty, beautifully done.'],
+    ['color_primary', '#391b31'],
+    ['color_accent', '#b86e82'],
+    ['color_cream', '#fffaf6'],
+    ['logo_style', 'gradient']
   ];
   for (const [k, v] of settings) {
     await pool.query('INSERT INTO salon_settings(key,value) VALUES($1,$2) ON CONFLICT(key) DO NOTHING', [k, v]);
@@ -336,7 +340,7 @@ app.get('/health', asyncRoute(async (req, res) => {
 }));
 
 app.get('/api/config', asyncRoute(async (req, res) => {
-  const r = await pool.query("SELECT key,value FROM salon_settings WHERE key IN ('salon_name','whatsapp','currency','timeZone','business_type','tagline','opening_time','closing_time')");
+  const r = await pool.query("SELECT key,value FROM salon_settings WHERE key IN ('salon_name','whatsapp','currency','timeZone','business_type','tagline','opening_time','closing_time','color_primary','color_accent','color_cream','logo_style')");
   const s = Object.fromEntries(r.rows.map(x => [x.key, x.value]));
   res.json({
     name: s.salon_name || salon.name,
@@ -346,7 +350,11 @@ app.get('/api/config', asyncRoute(async (req, res) => {
     businessType: s.business_type || 'Beauty Salon',
     tagline: s.tagline || 'Beauty, beautifully done.',
     openingTime: s.opening_time || '09:00',
-    closingTime: s.closing_time || '18:00'
+    closingTime: s.closing_time || '18:00',
+    colorPrimary: s.color_primary || '#391b31',
+    colorAccent: s.color_accent || '#b86e82',
+    colorCream: s.color_cream || '#fffaf6',
+    logoStyle: s.logo_style || 'gradient'
   });
 }));
 
@@ -572,11 +580,34 @@ app.get('/api/my/bookings', requireAuth, asyncRoute(async (req, res) => {
 app.get('/api/messages', requireAuth, asyncRoute(async (req, res) => {
   let r;
   if (req.user.role === 'admin') {
-    r = await pool.query(`SELECT m.*, u.full_name AS from_name, u.email AS from_email FROM messages m LEFT JOIN users u ON u.id = m.from_user_id ORDER BY m.created_at DESC LIMIT 100`);
+    r = await pool.query(`
+      SELECT m.*,
+             u.full_name AS from_name, u.email AS from_email,
+             tu.full_name AS to_name
+      FROM messages m
+      LEFT JOIN users u ON u.id = m.from_user_id
+      LEFT JOIN users tu ON tu.id = m.to_user_id
+      ORDER BY m.created_at ASC
+      LIMIT 200`);
   } else {
-    r = await pool.query(`SELECT m.* FROM messages m WHERE m.to_user_id=$1 OR m.from_user_id=$1 ORDER BY m.created_at DESC LIMIT 50`, [req.user.id]);
+    r = await pool.query(`
+      SELECT m.*,
+             u.full_name AS from_name
+      FROM messages m
+      LEFT JOIN users u ON u.id = m.from_user_id
+      WHERE m.to_user_id=$1 OR m.from_user_id=$1
+      ORDER BY m.created_at ASC
+      LIMIT 100`, [req.user.id]);
   }
   res.json(r.rows);
+}));
+
+app.get('/api/messages/unread-count', requireAuth, asyncRoute(async (req, res) => {
+  const r = await pool.query(
+    'SELECT COUNT(*)::int AS count FROM messages WHERE to_user_id=$1 AND read=FALSE',
+    [req.user.id]
+  );
+  res.json({ count: r.rows[0].count });
 }));
 
 app.post('/api/messages', requireAuth, asyncRoute(async (req, res) => {
@@ -674,7 +705,7 @@ app.get('/api/admin/settings', requireAdmin, asyncRoute(async (req, res) => {
 }));
 
 app.patch('/api/admin/settings', requireAdmin, asyncRoute(async (req, res) => {
-  const allowed = ['salon_name', 'whatsapp', 'opening_time', 'closing_time', 'slot_interval', 'closed_days', 'business_type', 'tagline'];
+const allowed = ['salon_name', 'whatsapp', 'opening_time', 'closing_time', 'slot_interval', 'closed_days', 'business_type', 'tagline', 'color_primary', 'color_accent', 'color_cream', 'logo_style'];
   const updates = [];
   for (const k of allowed) {
     if (req.body[k] === undefined) continue;
