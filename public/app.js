@@ -208,13 +208,25 @@ function showSuccess(d) {
 function openDash() {
   if (!user) return openAuth('login');
   $('#dashModal').classList.remove('hidden');
-  $('#dashTitle').textContent = user.role === 'admin' ? 'Owner Dashboard' : 'My Account';
+  document.body.classList.add('dash-open');
+  const title = user.role === 'admin' ? 'Owner Dashboard' : 'My account';
+  $('#dashTitle').textContent = title;
   $('#dashUser').textContent = `${user.fullName || user.email} · ${user.role}`;
+  if ($('#dashSideName')) $('#dashSideName').textContent = config.name?.split(' ')[0] || 'Pinnacle';
+  if ($('#dashSideRole')) $('#dashSideRole').textContent = user.role === 'admin' ? 'Salon admin' : 'Client account';
+  document.querySelectorAll('#dashModal .brand-mark').forEach(el => {
+    el.textContent = logoInitials(config.name || 'P');
+    el.dataset.style = config.logoStyle || 'gradient';
+  });
   renderDashTabs();
   loadDashTab(user.role === 'admin' ? 'overview' : 'mybookings');
 }
 
-function closeDash() { stopMsgPoll(); $('#dashModal').classList.add('hidden'); }
+function closeDash() {
+  stopMsgPoll();
+  $('#dashModal').classList.add('hidden');
+  document.body.classList.remove('dash-open');
+}
 
 function renderDashTabs() {
   const tabs = $('#dashTabs');
@@ -247,6 +259,13 @@ function renderDashTabs() {
 }
 async function loadDashTab(tab) {
   const host = $('#dashContent');
+  const titles = {
+    overview: 'Overview', bookings: 'Bookings', mybookings: 'My bookings',
+    services: 'Services', messages: 'Messages', gallery: 'Gallery',
+    reviews: 'Reviews', staff: 'Staff', settings: 'Settings',
+    profile: 'Profile', clients: 'Clients', review: 'Leave a review'
+  };
+  if ($('#dashTitle')) $('#dashTitle').textContent = titles[tab] || 'Dashboard';
   host.innerHTML = '<div class="loading">Loading…</div>';
   try {
     if (tab === 'overview') await renderOverview(host);

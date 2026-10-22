@@ -176,16 +176,27 @@
   </div>
 
   <!-- Dashboard Modal -->
-  <div id="dashModal" class="modal hidden" role="dialog" aria-modal="true">
-    <div class="modal-card modal-wide">
-      <button class="modal-close" id="dashClose" aria-label="Close">×</button>
-      <div class="dash-header">
-        <h2 id="dashTitle">Dashboard</h2>
-        <p id="dashUser" class="muted"></p>
+  <div id="dashModal" class="dash-shell hidden" role="dialog" aria-modal="true">
+    <aside class="dash-sidebar">
+      <div class="dash-side-brand">
+        <span class="brand-mark" id="dashBrandMark">P</span>
+        <div>
+          <strong id="dashSideName">Dashboard</strong>
+          <small id="dashSideRole">Account</small>
+        </div>
       </div>
-      <div class="dash-tabs" id="dashTabs"></div>
+      <nav class="dash-nav" id="dashTabs"></nav>
+      <button type="button" class="dash-exit" id="dashClose">← Back to website</button>
+    </aside>
+    <section class="dash-main">
+      <header class="dash-topbar">
+        <div>
+          <h2 id="dashTitle">Dashboard</h2>
+          <p id="dashUser" class="muted"></p>
+        </div>
+      </header>
       <div id="dashContent" class="dash-content"></div>
-    </div>
+    </section>
   </div>
 
   <!-- Booking Success Modal -->
