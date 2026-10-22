@@ -288,11 +288,11 @@ async function renderAdminBookings(host) {
   host.querySelectorAll('[data-status]').forEach(btn => {
     btn.addEventListener('click', async () => {
       try {
-        await api(`/api/admin/bookings/${encodeURIComponent(btn.dataset.id)}`, {
+        const out = await api(`/api/admin/bookings/${encodeURIComponent(btn.dataset.id)}`, {
           method: 'PATCH',
           body: JSON.stringify({ status: btn.dataset.status })
         });
-        toast(`Marked as ${btn.dataset.status}`);
+        toast(out.notify?.whatsapp ? `Marked ${btn.dataset.status} · client notified` : `Marked as ${btn.dataset.status}`);
         loadDashTab('bookings');
       } catch (e) { toast(e.message); }
     });
@@ -318,7 +318,7 @@ async function renderMyBookings(host) {
   host.innerHTML = `
     <div style="overflow-x:auto">
       <table class="dash-table">
-        <thead><tr><th>Service</th><th>Date</th><th>Time</th><th>Status</th><th>Price</th></tr></thead>
+        <thead><tr><th>Service</th><th>Date</th><th>Time</th><th>Status</th><th>Price</th><th></th></tr></thead>
         <tbody>
           ${rows.map(b => `
             <tr>
@@ -327,10 +327,21 @@ async function renderMyBookings(host) {
               <td>${esc(String(b.appointment_time).slice(0, 5))}</td>
               <td><span class="status status-${esc(b.status)}">${esc(b.status)}</span></td>
               <td>${money(b.price)}</td>
+              <td>${['Requested','Confirmed'].includes(b.status) ? `<button class="btn-sm btn-cancel" data-cancel="${esc(b.id)}">Cancel</button>` : ''}</td>
             </tr>`).join('')}
         </tbody>
       </table>
     </div>`;
+  host.querySelectorAll('[data-cancel]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      if (!confirm('Cancel this booking?')) return;
+      try {
+        await api(`/api/my/bookings/${encodeURIComponent(btn.dataset.cancel)}/cancel`, { method: 'PATCH' });
+        toast('Booking cancelled');
+        loadDashTab('mybookings');
+      } catch (e) { toast(e.message); }
+    });
+  });
 }
 
 async function renderAdminServices(host) {
@@ -623,6 +634,166 @@ async function renderMessages(host) {
   }, 3000);
 }
 
+async function renderOverview(host) {
+  const st = await api('/api/admin/stats');
+  host.innerHTML = `
+    <div class="stats-grid">
+      <div class="stat-card"><strong>${st.pending}</strong><span>Pending requests</span></div>
+      <div class="stat-card"><strong>${st.today.length}</strong><span>Today's appointments</span></div>
+      <div class="stat-card"><strong>${st.unreadMessages}</strong><span>Unread messages</span></div>
+      <div class="stat-card"><strong>${st.clients}</strong><span>Clients</span></div>
+      <div class="stat-card"><strong>${st.completed}</strong><span>Completed</span></div>
+    </div>
+    <h3 style="margin:8px 0 10px;color:var(--plum)">Today · ${esc(st.date)}</h3>
+    ${st.today.length ? `<div style="overflow-x:auto"><table class="dash-table"><thead><tr><th>Time</th><th>Client</th><th>Service</th><th>Status</th></tr></thead><tbody>
+      ${st.today.map(b => `<tr><td>${esc(String(b.appointment_time).slice(0,5))}</td><td>${esc(b.customer_name)}</td><td>${esc(b.service_name)}</td><td><span class="status status-${esc(b.status)}">${esc(b.status)}</span></td></tr>`).join('')}
+    </tbody></table></div>` : '<div class="empty">No appointments today.</div>'}
+    <div style="margin-top:16px;display:flex;gap:8px;flex-wrap:wrap">
+      <a class="btn btn-outline btn-sm" href="/api/admin/bookings/export" target="_blank" rel="noopener">Export bookings CSV</a>
+      <button type="button" class="btn btn-outline btn-sm" id="runReminders">Run tomorrow reminders</button>
+    </div>
+    <p class="muted" style="margin-top:8px">Reminders log to the server (or REMINDER_WEBHOOK if set).</p>`;
+  $('#runReminders')?.addEventListener('click', async () => {
+    try {
+      const d = await api('/api/admin/reminders/run', { method: 'POST' });
+      toast(`Reminders: ${d.found} found, ${d.sent} sent`);
+    } catch (e) { toast(e.message); }
+  });
+}
+
+async function renderAdminGallery(host) {
+  const rows = await api('/api/admin/gallery');
+  host.innerHTML = `
+    <form id="galForm" class="service-form" style="margin-bottom:16px">
+      <label>Title<input name="title" placeholder="Style name"></label>
+      <label>Caption<input name="caption" placeholder="Optional note"></label>
+      <label>Image URL<input name="image_url" required placeholder="https://…"></label>
+      <button type="submit" class="btn btn-primary btn-sm">Add photo</button>
+    </form>
+    <div class="gallery-grid">
+      ${rows.length ? rows.map(g => `
+        <article class="gallery-card">
+          <img src="${esc(g.image_url)}" alt="${esc(g.title)}" loading="lazy">
+          <div class="cap"><strong>${esc(g.title || 'Photo')}</strong>${esc(g.caption || '')}
+            <button type="button" class="btn-sm btn-delete" data-del="${esc(g.id)}" style="margin-top:8px">Delete</button>
+          </div>
+        </article>`).join('') : '<div class="empty">No gallery photos yet. Add image URLs above.</div>'}
+    </div>`;
+  $('#galForm')?.addEventListener('submit', async e => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    try {
+      await api('/api/admin/gallery', { method: 'POST', body: JSON.stringify(Object.fromEntries(fd)) });
+      toast('Photo added');
+      loadDashTab('gallery');
+      loadGalleryPublic();
+    } catch (err) { toast(err.message); }
+  });
+  host.querySelectorAll('[data-del]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      if (!confirm('Delete this photo?')) return;
+      try {
+        await api(`/api/admin/gallery/${encodeURIComponent(btn.dataset.del)}`, { method: 'DELETE' });
+        loadDashTab('gallery');
+        loadGalleryPublic();
+      } catch (e) { toast(e.message); }
+    });
+  });
+}
+
+async function renderAdminReviews(host) {
+  const rows = await api('/api/admin/reviews');
+  host.innerHTML = rows.length ? `<div style="overflow-x:auto"><table class="dash-table">
+    <thead><tr><th>Name</th><th>Rating</th><th>Comment</th><th>Status</th><th></th></tr></thead>
+    <tbody>${rows.map(r => `
+      <tr>
+        <td>${esc(r.customer_name)}</td>
+        <td>${'★'.repeat(r.rating)}${'☆'.repeat(5 - r.rating)}</td>
+        <td>${esc(r.comment)}</td>
+        <td>${r.approved ? 'Live' : 'Pending'}</td>
+        <td>
+          ${!r.approved ? `<button class="btn-sm btn-confirm" data-approve="${esc(r.id)}">Approve</button>` : ''}
+          ${r.approved ? `<button class="btn-sm btn-cancel" data-hide="${esc(r.id)}">Hide</button>` : ''}
+        </td>
+      </tr>`).join('')}</tbody></table></div>` : '<div class="empty">No reviews yet.</div>';
+  host.querySelectorAll('[data-approve]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      await api(`/api/admin/reviews/${encodeURIComponent(btn.dataset.approve)}`, { method: 'PATCH', body: JSON.stringify({ approved: true }) });
+      loadDashTab('reviews');
+      loadReviewsPublic();
+    });
+  });
+  host.querySelectorAll('[data-hide]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      await api(`/api/admin/reviews/${encodeURIComponent(btn.dataset.hide)}`, { method: 'PATCH', body: JSON.stringify({ approved: false }) });
+      loadDashTab('reviews');
+      loadReviewsPublic();
+    });
+  });
+}
+
+async function renderStaff(host) {
+  const rows = await api('/api/admin/staff');
+  host.innerHTML = `
+    <p class="muted">Promote an existing client account to staff/admin by email.</p>
+    <form id="promoteForm" class="service-form" style="margin-bottom:16px">
+      <label>Client email<input name="email" type="email" required placeholder="staff@email.com"></label>
+      <button type="submit" class="btn btn-primary btn-sm">Promote to admin</button>
+    </form>
+    <table class="dash-table"><thead><tr><th>Name</th><th>Email</th><th>Role</th><th></th></tr></thead>
+    <tbody>${rows.map(u => `
+      <tr>
+        <td>${esc(u.full_name)}</td>
+        <td>${esc(u.email)}</td>
+        <td>${esc(u.role)}</td>
+        <td>${u.id !== user.id ? `<button class="btn-sm btn-cancel" data-demote="${esc(u.id)}">Demote</button>` : 'You'}</td>
+      </tr>`).join('')}</tbody></table>`;
+  $('#promoteForm')?.addEventListener('submit', async e => {
+    e.preventDefault();
+    try {
+      await api('/api/admin/staff/promote', { method: 'POST', body: JSON.stringify({ email: e.target.email.value }) });
+      toast('Promoted');
+      loadDashTab('staff');
+    } catch (err) { toast(err.message); }
+  });
+  host.querySelectorAll('[data-demote]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      if (!confirm('Demote this admin to client?')) return;
+      try {
+        await api('/api/admin/staff/demote', { method: 'POST', body: JSON.stringify({ userId: btn.dataset.demote }) });
+        loadDashTab('staff');
+      } catch (e) { toast(e.message); }
+    });
+  });
+}
+
+async function renderClientReview(host) {
+  host.innerHTML = `
+    <form id="reviewForm" class="profile-form">
+      <p class="muted">Share how your visit went. Reviews appear after approval.</p>
+      <label>Rating
+        <select name="rating" required>
+          <option value="5">5 ★★★★★</option>
+          <option value="4">4 ★★★★</option>
+          <option value="3">3 ★★★</option>
+          <option value="2">2 ★★</option>
+          <option value="1">1 ★</option>
+        </select>
+      </label>
+      <label>Comment<textarea name="comment" rows="3" maxlength="500" placeholder="Optional feedback"></textarea></label>
+      <button type="submit" class="btn btn-primary btn-sm">Submit review</button>
+    </form>`;
+  $('#reviewForm')?.addEventListener('submit', async e => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    try {
+      const d = await api('/api/reviews', { method: 'POST', body: JSON.stringify({ rating: Number(fd.get('rating')), comment: fd.get('comment') }) });
+      toast(d.message || 'Thanks!');
+      e.target.reset();
+    } catch (err) { toast(err.message); }
+  });
+}
+
 async function renderSettings(host) {
   const s = await api('/api/admin/settings');
   const logoStyles = [
@@ -655,6 +826,12 @@ async function renderSettings(host) {
       <label>Logo style
         <select name="logo_style">
           ${logoStyles.map(([v, lab]) => `<option value="${v}" ${(s.logo_style || 'gradient') === v ? 'selected' : ''}>${lab}</option>`).join('')}
+        </select>
+      </label>
+      <label>Theme
+        <select name="theme_mode">
+          <option value="light" ${(s.theme_mode || 'light') === 'light' ? 'selected' : ''}>Light</option>
+          <option value="dark" ${s.theme_mode === 'dark' ? 'selected' : ''}>Dark</option>
         </select>
       </label>
       <div class="logo-preview-row">
@@ -785,6 +962,7 @@ function applyBranding() {
   root.style.setProperty('--cream', cream);
   root.style.setProperty('--pink', accent + '22');
   root.style.setProperty('--plum2', primary);
+  document.body.classList.toggle('theme-dark', (config.themeMode || 'light') === 'dark');
 }
 
 async function loadPublic() {
@@ -800,10 +978,13 @@ async function loadPublic() {
     colorPrimary: cfg.colorPrimary,
     colorAccent: cfg.colorAccent,
     colorCream: cfg.colorCream,
-    logoStyle: cfg.logoStyle
+    logoStyle: cfg.logoStyle,
+    themeMode: cfg.themeMode
   };
   applyBranding();
   renderServices();
+  loadGalleryPublic();
+  loadReviewsPublic();
   const dateInput = $('#bookingForm [name=date]');
   if (dateInput) {
     dateInput.min = todayLocal();
@@ -911,6 +1092,33 @@ function bindEvents() {
   });
 
   $('#year').textContent = new Date().getFullYear();
+}
+
+
+async function loadGalleryPublic() {
+  const grid = $('#galleryGrid');
+  if (!grid) return;
+  try {
+    const rows = await api('/api/gallery');
+    grid.innerHTML = rows.length
+      ? rows.map(g => `<article class="gallery-card"><img src="${esc(g.image_url)}" alt="${esc(g.title)}" loading="lazy"><div class="cap"><strong>${esc(g.title || '')}</strong>${esc(g.caption || '')}</div></article>`).join('')
+      : '<div class="empty-state">Gallery photos coming soon.</div>';
+  } catch {
+    grid.innerHTML = '<div class="empty-state">Gallery unavailable.</div>';
+  }
+}
+
+async function loadReviewsPublic() {
+  const grid = $('#reviewsGrid');
+  if (!grid) return;
+  try {
+    const rows = await api('/api/reviews');
+    grid.innerHTML = rows.length
+      ? rows.map(r => `<article class="review-card"><div class="review-stars">${'★'.repeat(r.rating)}${'☆'.repeat(5-r.rating)}</div><p>${esc(r.comment || 'Great experience.')}</p><div class="who">— ${esc(r.customer_name)}</div></article>`).join('')
+      : '<div class="empty-state">Be the first to leave a review after your visit.</div>';
+  } catch {
+    grid.innerHTML = '<div class="empty-state">Reviews unavailable.</div>';
+  }
 }
 
 // Boot - force all modals closed on load

@@ -244,3 +244,33 @@ nav a:hover, .text-link:hover { color: var(--rose); }
   nav.open { display: flex; flex-direction: column; position: absolute; top: 78px; left: 0; right: 0; background: #fff; padding: 20px; gap: 16px; border-bottom: 1px solid var(--line); }
   .menu-toggle { display: block; }
 }
+
+.gallery-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; }
+.gallery-card { border-radius: 14px; overflow: hidden; border: 1px solid var(--line); background: #fff; }
+.gallery-card img { width: 100%; height: 180px; object-fit: cover; display: block; background: #eee; }
+.gallery-card .cap { padding: 10px 12px; font-size: .88rem; }
+.gallery-card strong { display: block; color: var(--plum); }
+.reviews-section { background: #fff; border-top: 1px solid var(--line); }
+.reviews-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 14px; }
+.review-card { background: var(--cream); border: 1px solid var(--line); border-radius: 14px; padding: 16px; }
+.review-stars { color: #c9a227; letter-spacing: 2px; margin-bottom: 6px; }
+.review-card .who { font-size: .8rem; color: var(--muted); margin-top: 10px; }
+.stats-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px; margin-bottom: 18px; }
+.stat-card { background: var(--cream); border: 1px solid var(--line); border-radius: 12px; padding: 14px; }
+.stat-card strong { display: block; font-size: 1.6rem; color: var(--plum); }
+.stat-card span { font-size: .8rem; color: var(--muted); }
+body.theme-dark {
+  --cream: #1a1520;
+  --ink: #f3eef1;
+  --muted: #b5a8b0;
+  --line: #3a3038;
+  --white: #241c28;
+  background: #120e16;
+  color: var(--ink);
+}
+body.theme-dark .topbar, body.theme-dark .service-card, body.theme-dark .booking-form,
+body.theme-dark .modal-card, body.theme-dark .about-section, body.theme-dark .inbox {
+  background: #241c28;
+}
+body.theme-dark .msg-list { background: #1a1520; }
+body.theme-dark .conv-list { background: #1a1520; }
