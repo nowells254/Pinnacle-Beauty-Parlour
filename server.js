@@ -287,6 +287,33 @@ async function initDb() {
   await pool.query(`CREATE INDEX IF NOT EXISTS messages_to_user_idx ON messages(to_user_id, read)`);
 
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS gallery (
+      id TEXT PRIMARY KEY,
+      title TEXT NOT NULL DEFAULT '',
+      caption TEXT NOT NULL DEFAULT '',
+      image_url TEXT NOT NULL,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      active BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS reviews (
+      id TEXT PRIMARY KEY,
+      booking_id TEXT REFERENCES bookings(id) ON DELETE SET NULL,
+      user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+      customer_name TEXT NOT NULL DEFAULT '',
+      rating INTEGER NOT NULL CHECK (rating BETWEEN 1 AND 5),
+      comment TEXT NOT NULL DEFAULT '',
+      approved BOOLEAN NOT NULL DEFAULT FALSE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS reviews_approved_idx ON reviews(approved, created_at DESC)`);
+
+  // staff = users with role admin; allow promoting clients via admin endpoint
+
+
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS salon_settings (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL,
@@ -312,7 +339,8 @@ async function initDb() {
     ['color_primary', '#391b31'],
     ['color_accent', '#b86e82'],
     ['color_cream', '#fffaf6'],
-    ['logo_style', 'gradient']
+    ['logo_style', 'gradient'],
+    ['theme_mode', 'light']
   ];
   for (const [k, v] of settings) {
     await pool.query('INSERT INTO salon_settings(key,value) VALUES($1,$2) ON CONFLICT(key) DO NOTHING', [k, v]);
@@ -340,7 +368,7 @@ app.get('/health', asyncRoute(async (req, res) => {
 }));
 
 app.get('/api/config', asyncRoute(async (req, res) => {
-  const r = await pool.query("SELECT key,value FROM salon_settings WHERE key IN ('salon_name','whatsapp','currency','timeZone','business_type','tagline','opening_time','closing_time','color_primary','color_accent','color_cream','logo_style')");
+  const r = await pool.query("SELECT key,value FROM salon_settings WHERE key IN ('salon_name','whatsapp','currency','timeZone','business_type','tagline','opening_time','closing_time','color_primary','color_accent','color_cream','logo_style','theme_mode')");
   const s = Object.fromEntries(r.rows.map(x => [x.key, x.value]));
   res.json({
     name: s.salon_name || salon.name,
@@ -354,7 +382,8 @@ app.get('/api/config', asyncRoute(async (req, res) => {
     colorPrimary: s.color_primary || '#391b31',
     colorAccent: s.color_accent || '#b86e82',
     colorCream: s.color_cream || '#fffaf6',
-    logoStyle: s.logo_style || 'gradient'
+    logoStyle: s.logo_style || 'gradient',
+    themeMode: s.theme_mode || 'light'
   });
 }));
 
@@ -783,7 +812,28 @@ app.patch('/api/admin/bookings/:id', requireAdmin, asyncRoute(async (req, res) =
   if (!['Requested', 'Confirmed', 'Completed', 'Cancelled'].includes(status)) return res.status(400).json({ error: 'Invalid status.' });
   const r = await pool.query('UPDATE bookings SET status=$1, updated_at=NOW() WHERE id=$2 RETURNING *', [status, id]);
   if (!r.rowCount) return res.status(404).json({ error: 'Booking not found.' });
-  res.json(r.rows[0]);
+  const b = r.rows[0];
+  // Notify client in-app when confirmed / cancelled / completed
+  if (b.user_id && ['Confirmed', 'Cancelled', 'Completed'].includes(status)) {
+    const msg = status === 'Confirmed'
+      ? `Your booking ${b.id} for ${b.service_name} on ${String(b.appointment_date).slice(0,10)} at ${String(b.appointment_time).slice(0,5)} is CONFIRMED. We look forward to seeing you!`
+      : status === 'Cancelled'
+      ? `Your booking ${b.id} for ${b.service_name} on ${String(b.appointment_date).slice(0,10)} has been cancelled. Message us if you need to rebook.`
+      : `Thanks for visiting! Your booking ${b.id} is marked completed. We'd love a quick review from your account.`;
+    await pool.query(
+      `INSERT INTO messages(id,booking_id,from_user_id,to_user_id,sender_role,body) VALUES($1,$2,$3,$4,'admin',$5)`,
+      [makeId('MSG'), b.id, req.user.id, b.user_id, msg]
+    );
+  }
+  const wa = (await pool.query("SELECT value FROM salon_settings WHERE key='whatsapp'")).rows[0]?.value || salon.whatsapp;
+  res.json({
+    ...b,
+    notify: {
+      whatsapp: wa && status === 'Confirmed'
+        ? `https://wa.me/${String(wa).replace(/\D/g,'')}?text=${encodeURIComponent(`Hi ${b.customer_name}, your booking ${b.id} for ${b.service_name} on ${String(b.appointment_date).slice(0,10)} at ${String(b.appointment_time).slice(0,5)} is confirmed.`)}`
+        : null
+    }
+  });
 }));
 
 app.delete('/api/admin/bookings/:id', requireAdmin, asyncRoute(async (req, res) => {
@@ -839,7 +889,7 @@ app.get('/api/admin/settings', requireAdmin, asyncRoute(async (req, res) => {
 }));
 
 app.patch('/api/admin/settings', requireAdmin, asyncRoute(async (req, res) => {
-const allowed = ['salon_name', 'whatsapp', 'opening_time', 'closing_time', 'slot_interval', 'closed_days', 'business_type', 'tagline', 'color_primary', 'color_accent', 'color_cream', 'logo_style'];
+const allowed = ['salon_name', 'whatsapp', 'opening_time', 'closing_time', 'slot_interval', 'closed_days', 'business_type', 'tagline', 'color_primary', 'color_accent', 'color_cream', 'logo_style', 'theme_mode'];
   const updates = [];
   for (const k of allowed) {
     if (req.body[k] === undefined) continue;
@@ -867,6 +917,159 @@ app.get('/api/admin/clients', requireAdmin, asyncRoute(async (req, res) => {
   const r = await pool.query("SELECT id,email,full_name,phone,created_at FROM users WHERE role='client' ORDER BY created_at DESC LIMIT 100");
   res.json(r.rows);
 }));
+
+// —— Client cancel own booking ——
+app.patch('/api/my/bookings/:id/cancel', requireAuth, asyncRoute(async (req, res) => {
+  if (req.user.role !== 'client') return res.status(403).json({ error: 'Clients only.' });
+  const id = cleanText(req.params.id, 30);
+  const r = await pool.query(
+    `UPDATE bookings SET status='Cancelled', updated_at=NOW()
+     WHERE id=$1 AND user_id=$2 AND status IN ('Requested','Confirmed')
+     RETURNING *`, [id, req.user.id]
+  );
+  if (!r.rowCount) return res.status(404).json({ error: 'Booking not found or cannot be cancelled.' });
+  res.json(r.rows[0]);
+}));
+
+// —— Admin overview stats ——
+app.get('/api/admin/stats', requireAdmin, asyncRoute(async (req, res) => {
+  const todayParts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone: salon.timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date()).map(x => [x.type, x.value]));
+  const today = `${todayParts.year}-${todayParts.month}-${todayParts.day}`;
+  const [pending, todayRows, unread, clients, completed] = await Promise.all([
+    pool.query(`SELECT COUNT(*)::int AS c FROM bookings WHERE status='Requested'`),
+    pool.query(`SELECT id, customer_name, service_name, appointment_time, status FROM bookings WHERE appointment_date=$1 AND status IN ('Requested','Confirmed') ORDER BY appointment_time`, [today]),
+    pool.query(`SELECT COUNT(*)::int AS c FROM messages WHERE to_user_id=$1 AND read=FALSE`, [req.user.id]),
+    pool.query(`SELECT COUNT(*)::int AS c FROM users WHERE role='client'`),
+    pool.query(`SELECT COUNT(*)::int AS c FROM bookings WHERE status='Completed'`)
+  ]);
+  res.json({
+    pending: pending.rows[0].c,
+    today: todayRows.rows,
+    unreadMessages: unread.rows[0].c,
+    clients: clients.rows[0].c,
+    completed: completed.rows[0].c,
+    date: today
+  });
+}));
+
+// —— Export bookings CSV ——
+app.get('/api/admin/bookings/export', requireAdmin, asyncRoute(async (req, res) => {
+  const r = await pool.query(`SELECT id, customer_name, phone, service_name, price, appointment_date, appointment_time, status, notes, created_at FROM bookings ORDER BY appointment_date DESC, appointment_time DESC LIMIT 2000`);
+  const header = 'id,customer_name,phone,service_name,price,appointment_date,appointment_time,status,notes,created_at';
+  const lines = r.rows.map(b => [b.id, b.customer_name, b.phone, b.service_name, b.price, b.appointment_date, b.appointment_time, b.status, (b.notes||'').replace(/"/g,'""'), b.created_at].map(v => `"${String(v ?? '').replace(/"/g,'""')}"`).join(','));
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Content-Disposition', 'attachment; filename="bookings.csv"');
+  res.send([header, ...lines].join('\n'));
+}));
+
+// —— Gallery public + admin ——
+app.get('/api/gallery', asyncRoute(async (req, res) => {
+  const r = await pool.query(`SELECT id, title, caption, image_url, sort_order FROM gallery WHERE active=TRUE ORDER BY sort_order, created_at DESC LIMIT 60`);
+  res.json(r.rows);
+}));
+
+app.get('/api/admin/gallery', requireAdmin, asyncRoute(async (req, res) => {
+  const r = await pool.query(`SELECT * FROM gallery ORDER BY sort_order, created_at DESC`);
+  res.json(r.rows);
+}));
+
+app.post('/api/admin/gallery', requireAdmin, asyncRoute(async (req, res) => {
+  const title = cleanText(req.body.title, 100);
+  const caption = cleanText(req.body.caption, 300);
+  const image_url = cleanText(req.body.image_url, 500);
+  if (!image_url || !/^https?:\/\//i.test(image_url)) return res.status(400).json({ error: 'Provide a valid image URL (https://...).' });
+  const id = makeId('GAL');
+  const r = await pool.query(
+    `INSERT INTO gallery(id,title,caption,image_url,sort_order,active) VALUES($1,$2,$3,$4,$5,TRUE) RETURNING *`,
+    [id, title, caption, image_url, Number(req.body.sort_order) || 0]
+  );
+  res.status(201).json(r.rows[0]);
+}));
+
+app.delete('/api/admin/gallery/:id', requireAdmin, asyncRoute(async (req, res) => {
+  const r = await pool.query(`DELETE FROM gallery WHERE id=$1 RETURNING id`, [cleanText(req.params.id, 30)]);
+  if (!r.rowCount) return res.status(404).json({ error: 'Not found.' });
+  res.json({ ok: true });
+}));
+
+// —— Reviews ——
+app.get('/api/reviews', asyncRoute(async (req, res) => {
+  const r = await pool.query(`SELECT id, customer_name, rating, comment, created_at FROM reviews WHERE approved=TRUE ORDER BY created_at DESC LIMIT 40`);
+  res.json(r.rows);
+}));
+
+app.post('/api/reviews', requireAuth, asyncRoute(async (req, res) => {
+  if (req.user.role !== 'client') return res.status(403).json({ error: 'Clients only.' });
+  const rating = Number(req.body.rating);
+  const comment = cleanText(req.body.comment, 500);
+  const bookingId = cleanText(req.body.bookingId || '', 30) || null;
+  if (!Number.isInteger(rating) || rating < 1 || rating > 5) return res.status(400).json({ error: 'Rating must be 1–5.' });
+  const u = await pool.query('SELECT full_name FROM users WHERE id=$1', [req.user.id]);
+  const id = makeId('REV');
+  const r = await pool.query(
+    `INSERT INTO reviews(id,booking_id,user_id,customer_name,rating,comment,approved) VALUES($1,$2,$3,$4,$5,$6,FALSE) RETURNING id,rating,comment,created_at`,
+    [id, bookingId, req.user.id, u.rows[0]?.full_name || 'Client', rating, comment]
+  );
+  res.status(201).json({ ...r.rows[0], message: 'Thank you! Your review will appear after approval.' });
+}));
+
+app.get('/api/admin/reviews', requireAdmin, asyncRoute(async (req, res) => {
+  const r = await pool.query(`SELECT * FROM reviews ORDER BY created_at DESC LIMIT 100`);
+  res.json(r.rows);
+}));
+
+app.patch('/api/admin/reviews/:id', requireAdmin, asyncRoute(async (req, res) => {
+  const approved = !!req.body.approved;
+  const r = await pool.query(`UPDATE reviews SET approved=$1 WHERE id=$2 RETURNING *`, [approved, cleanText(req.params.id, 30)]);
+  if (!r.rowCount) return res.status(404).json({ error: 'Not found.' });
+  res.json(r.rows[0]);
+}));
+
+// —— Staff: list admins + promote client to admin ——
+app.get('/api/admin/staff', requireAdmin, asyncRoute(async (req, res) => {
+  const r = await pool.query(`SELECT id, email, full_name, phone, role, created_at FROM users WHERE role='admin' ORDER BY created_at`);
+  res.json(r.rows);
+}));
+
+app.post('/api/admin/staff/promote', requireAdmin, asyncRoute(async (req, res) => {
+  const email = cleanText(req.body.email, 200).toLowerCase();
+  if (!validEmail(email)) return res.status(400).json({ error: 'Valid email required.' });
+  const r = await pool.query(`UPDATE users SET role='admin', updated_at=NOW() WHERE email=$1 RETURNING id,email,full_name,role`, [email]);
+  if (!r.rowCount) return res.status(404).json({ error: 'No user with that email. They must sign up first.' });
+  res.json(r.rows[0]);
+}));
+
+app.post('/api/admin/staff/demote', requireAdmin, asyncRoute(async (req, res) => {
+  const id = cleanText(req.body.userId, 30);
+  if (id === req.user.id) return res.status(400).json({ error: 'You cannot demote yourself.' });
+  const admins = await pool.query(`SELECT COUNT(*)::int AS c FROM users WHERE role='admin'`);
+  if (admins.rows[0].c <= 1) return res.status(400).json({ error: 'Keep at least one admin.' });
+  const r = await pool.query(`UPDATE users SET role='client', updated_at=NOW() WHERE id=$1 AND role='admin' RETURNING id,email,role`, [id]);
+  if (!r.rowCount) return res.status(404).json({ error: 'Admin not found.' });
+  res.json(r.rows[0]);
+}));
+
+// Reminder scaffold (logs only unless REMINDER_WEBHOOK set)
+app.post('/api/admin/reminders/run', requireAdmin, asyncRoute(async (req, res) => {
+  const tomorrowParts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone: salon.timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date(Date.now() + 86400000)).map(x => [x.type, x.value]));
+  const day = `${tomorrowParts.year}-${tomorrowParts.month}-${tomorrowParts.day}`;
+  const r = await pool.query(`SELECT * FROM bookings WHERE appointment_date=$1 AND status='Confirmed'`, [day]);
+  const webhook = process.env.REMINDER_WEBHOOK || '';
+  let sent = 0;
+  for (const b of r.rows) {
+    const payload = { type: 'booking_reminder', booking: b };
+    if (webhook) {
+      try {
+        await fetch(webhook, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+        sent++;
+      } catch (e) { console.error('Reminder webhook failed', e.message); }
+    } else {
+      console.log('Reminder (no webhook):', b.id, b.customer_name, b.phone);
+    }
+  }
+  res.json({ ok: true, date: day, found: r.rows.length, sent, note: webhook ? 'Posted to REMINDER_WEBHOOK' : 'Set REMINDER_WEBHOOK env to enable SMS/email provider' });
+}));
+
 
 app.get('*', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 app.use((err, req, res, next) => {
