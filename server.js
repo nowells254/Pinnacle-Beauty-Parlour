@@ -22,7 +22,7 @@ const pool = new Pool({
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 10000
 });
-
+const presenceMap = new Map();
 const salon = {
   name: process.env.SALON_NAME || 'Pinnacle BeautyParlour',
   whatsapp: process.env.SALON_WHATSAPP || '',
@@ -577,32 +577,160 @@ app.get('/api/my/bookings', requireAuth, asyncRoute(async (req, res) => {
   res.json(r.rows);
 }));
 
+function touchPresence(userId) {
+  if (!userId) return;
+  const cur = presenceMap.get(userId) || {};
+  presenceMap.set(userId, { ...cur, lastSeen: Date.now() });
+}
+function isOnline(userId) {
+  const p = presenceMap.get(userId);
+  return !!(p && Date.now() - p.lastSeen < 45000);
+}
+function isTypingTo(fromId, toId) {
+  const p = presenceMap.get(fromId);
+  return !!(p && p.typingTo === toId && p.typingUntil && p.typingUntil > Date.now());
+}
+
+app.post('/api/presence/ping', requireAuth, (req, res) => {
+  touchPresence(req.user.id);
+  res.json({ ok: true });
+});
+
+app.post('/api/presence/typing', requireAuth, (req, res) => {
+  touchPresence(req.user.id);
+  const to = cleanText(req.body.toUserId || '', 30);
+  const cur = presenceMap.get(req.user.id) || {};
+  presenceMap.set(req.user.id, {
+    ...cur,
+    lastSeen: Date.now(),
+    typingTo: to || null,
+    typingUntil: to ? Date.now() + 4000 : 0
+  });
+  res.json({ ok: true });
+});
+
+app.get('/api/presence/:userId', requireAuth, (req, res) => {
+  const id = cleanText(req.params.userId, 30);
+  touchPresence(req.user.id);
+  res.json({ online: isOnline(id), typing: isTypingTo(id, req.user.id) });
+});
+
+app.get('/api/messages/conversations', requireAuth, asyncRoute(async (req, res) => {
+  touchPresence(req.user.id);
+  if (req.user.role !== 'admin') {
+    const admin = await pool.query("SELECT id, full_name FROM users WHERE role='admin' LIMIT 1");
+    if (!admin.rowCount) return res.json([]);
+    const a = admin.rows[0];
+    const last = await pool.query(
+      `SELECT body, created_at FROM messages
+       WHERE (from_user_id=$1 AND to_user_id=$2) OR (from_user_id=$2 AND to_user_id=$1)
+       ORDER BY created_at DESC LIMIT 1`, [req.user.id, a.id]
+    );
+    const unread = await pool.query(
+      `SELECT COUNT(*)::int AS c FROM messages WHERE to_user_id=$1 AND from_user_id=$2 AND read=FALSE`,
+      [req.user.id, a.id]
+    );
+    return res.json([{
+      userId: a.id,
+      name: a.full_name || 'Salon',
+      lastMessage: last.rows[0]?.body || '',
+      lastAt: last.rows[0]?.created_at || null,
+      unread: unread.rows[0].c,
+      online: isOnline(a.id)
+    }]);
+  }
+
+  const r = await pool.query(`
+    WITH people AS (
+      SELECT DISTINCT CASE WHEN from_user_id = $1 THEN to_user_id ELSE from_user_id END AS peer_id
+      FROM messages
+      WHERE from_user_id = $1 OR to_user_id = $1
+    )
+    SELECT p.peer_id AS user_id,
+           u.full_name AS name,
+           u.email,
+           (SELECT body FROM messages m2
+            WHERE (m2.from_user_id=$1 AND m2.to_user_id=p.peer_id)
+               OR (m2.from_user_id=p.peer_id AND m2.to_user_id=$1)
+            ORDER BY m2.created_at DESC LIMIT 1) AS last_message,
+           (SELECT created_at FROM messages m2
+            WHERE (m2.from_user_id=$1 AND m2.to_user_id=p.peer_id)
+               OR (m2.from_user_id=p.peer_id AND m2.to_user_id=$1)
+            ORDER BY m2.created_at DESC LIMIT 1) AS last_at,
+           (SELECT COUNT(*)::int FROM messages m2
+            WHERE m2.to_user_id=$1 AND m2.from_user_id=p.peer_id AND m2.read=FALSE) AS unread
+    FROM people p
+    JOIN users u ON u.id = p.peer_id
+    WHERE u.role = 'client'
+    ORDER BY last_at DESC NULLS LAST
+  `, [req.user.id]);
+
+  res.json(r.rows.map(row => ({
+    userId: row.user_id,
+    name: row.name || 'Client',
+    email: row.email,
+    lastMessage: row.last_message || '',
+    lastAt: row.last_at,
+    unread: row.unread || 0,
+    online: isOnline(row.user_id)
+  })));
+}));
+
+app.get('/api/messages/thread/:peerId', requireAuth, asyncRoute(async (req, res) => {
+  touchPresence(req.user.id);
+  const peerId = cleanText(req.params.peerId, 30);
+  const r = await pool.query(`
+    SELECT m.*, u.full_name AS from_name
+    FROM messages m
+    LEFT JOIN users u ON u.id = m.from_user_id
+    WHERE (m.from_user_id=$1 AND m.to_user_id=$2)
+       OR (m.from_user_id=$2 AND m.to_user_id=$1)
+    ORDER BY m.created_at ASC
+    LIMIT 200
+  `, [req.user.id, peerId]);
+  await pool.query(
+    `UPDATE messages SET read=TRUE WHERE to_user_id=$1 AND from_user_id=$2 AND read=FALSE`,
+    [req.user.id, peerId]
+  );
+  res.json({
+    messages: r.rows,
+    peer: { online: isOnline(peerId), typing: isTypingTo(peerId, req.user.id) }
+  });
+}));
+
 app.get('/api/messages', requireAuth, asyncRoute(async (req, res) => {
+  touchPresence(req.user.id);
+  const peerId = cleanText(req.query.with || '', 30);
   let r;
-  if (req.user.role === 'admin') {
+  if (peerId) {
     r = await pool.query(`
-      SELECT m.*,
-             u.full_name AS from_name, u.email AS from_email,
-             tu.full_name AS to_name
+      SELECT m.*, u.full_name AS from_name
+      FROM messages m
+      LEFT JOIN users u ON u.id = m.from_user_id
+      WHERE (m.from_user_id=$1 AND m.to_user_id=$2)
+         OR (m.from_user_id=$2 AND m.to_user_id=$1)
+      ORDER BY m.created_at ASC LIMIT 200
+    `, [req.user.id, peerId]);
+  } else if (req.user.role === 'admin') {
+    r = await pool.query(`
+      SELECT m.*, u.full_name AS from_name, u.email AS from_email, tu.full_name AS to_name
       FROM messages m
       LEFT JOIN users u ON u.id = m.from_user_id
       LEFT JOIN users tu ON tu.id = m.to_user_id
-      ORDER BY m.created_at ASC
-      LIMIT 200`);
+      ORDER BY m.created_at ASC LIMIT 200`);
   } else {
     r = await pool.query(`
-      SELECT m.*,
-             u.full_name AS from_name
+      SELECT m.*, u.full_name AS from_name
       FROM messages m
       LEFT JOIN users u ON u.id = m.from_user_id
       WHERE m.to_user_id=$1 OR m.from_user_id=$1
-      ORDER BY m.created_at ASC
-      LIMIT 100`, [req.user.id]);
+      ORDER BY m.created_at ASC LIMIT 100`, [req.user.id]);
   }
   res.json(r.rows);
 }));
 
 app.get('/api/messages/unread-count', requireAuth, asyncRoute(async (req, res) => {
+  touchPresence(req.user.id);
   const r = await pool.query(
     'SELECT COUNT(*)::int AS count FROM messages WHERE to_user_id=$1 AND read=FALSE',
     [req.user.id]
@@ -611,6 +739,7 @@ app.get('/api/messages/unread-count', requireAuth, asyncRoute(async (req, res) =
 }));
 
 app.post('/api/messages', requireAuth, asyncRoute(async (req, res) => {
+  touchPresence(req.user.id);
   const body = cleanText(req.body.body, 2000);
   const bookingId = cleanText(req.body.bookingId || '', 30) || null;
   if (body.length < 1) return res.status(400).json({ error: 'Message cannot be empty.' });
@@ -624,7 +753,13 @@ app.post('/api/messages', requireAuth, asyncRoute(async (req, res) => {
     if (!toUserId) return res.status(400).json({ error: 'Specify the client to reply to.' });
   }
   const id = makeId('MSG');
-  const r = await pool.query(`INSERT INTO messages(id,booking_id,from_user_id,to_user_id,sender_role,body) VALUES($1,$2,$3,$4,$5,$6) RETURNING *`, [id, bookingId, req.user.id, toUserId, req.user.role, body]);
+  const r = await pool.query(
+    `INSERT INTO messages(id,booking_id,from_user_id,to_user_id,sender_role,body)
+     VALUES($1,$2,$3,$4,$5,$6) RETURNING *`,
+    [id, bookingId, req.user.id, toUserId, req.user.role, body]
+  );
+  const cur = presenceMap.get(req.user.id) || {};
+  presenceMap.set(req.user.id, { ...cur, typingTo: null, typingUntil: 0, lastSeen: Date.now() });
   res.status(201).json(r.rows[0]);
 }));
 
@@ -632,7 +767,6 @@ app.patch('/api/messages/:id/read', requireAuth, asyncRoute(async (req, res) => 
   await pool.query('UPDATE messages SET read=TRUE WHERE id=$1 AND to_user_id=$2', [cleanText(req.params.id, 30), req.user.id]);
   res.json({ ok: true });
 }));
-
 app.get('/api/admin/me', requireAdmin, asyncRoute(async (req, res) => {
   const r = await pool.query('SELECT id,email,full_name,phone,role,created_at FROM users WHERE id=$1', [req.user.id]);
   res.json(r.rows[0] || { authenticated: true, role: 'admin' });

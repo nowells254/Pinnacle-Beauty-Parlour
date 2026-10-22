@@ -416,96 +416,211 @@ function updateMsgBadge(count) {
   }
 }
 
+function playMsgSound() {
+  try {
+    const ctx = playMsgSound._ctx || (playMsgSound._ctx = new (window.AudioContext || window.webkitAudioContext)());
+    const o = ctx.createOscillator();
+    const g = ctx.createGain();
+    o.type = 'sine';
+    o.frequency.setValueAtTime(880, ctx.currentTime);
+    o.frequency.exponentialRampToValueAtTime(660, ctx.currentTime + 0.12);
+    g.gain.setValueAtTime(0.0001, ctx.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.08, ctx.currentTime + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.25);
+    o.connect(g); g.connect(ctx.destination);
+    o.start(); o.stop(ctx.currentTime + 0.28);
+  } catch {}
+}
+
 async function renderMessages(host) {
   stopMsgPoll();
   const isAdmin = user.role === 'admin';
+  let activePeer = replyTarget ? { id: replyTarget.id, name: replyTarget.name } : null;
+  let knownMsgIds = new Set();
+  let typingTimer = null;
+
   host.innerHTML = `
-    <div class="chat-wrap">
-      <div class="msg-list" id="msgList"><div class="loading">Loading chat…</div></div>
-      <div class="msg-compose">
-        <div id="replyBar" class="reply-bar hidden">
-          <span id="replyLabel"></span>
-          <button type="button" id="clearReply" class="reply-clear" title="Cancel">×</button>
+    <div class="inbox">
+      <aside class="conv-list" id="convList"><div class="loading">Loading…</div></aside>
+      <section class="chat-pane">
+        <div class="chat-header" id="chatHeader">
+          <button type="button" class="chat-back hidden" id="chatBack">←</button>
+          <div>
+            <div class="chat-peer-name" id="chatPeerName">Select a chat</div>
+            <div class="chat-peer-status" id="chatPeerStatus"></div>
+          </div>
         </div>
-        <textarea id="msgBody" rows="2" placeholder="${isAdmin ? 'Click Reply on a client message, then type…' : 'Type a message to the salon…'}"></textarea>
-        <button class="btn btn-primary btn-sm" id="sendMsg">Send</button>
-      </div>
+        <div class="msg-list" id="msgList"><div class="empty">Choose a conversation on the left</div></div>
+        <div class="typing-line hidden" id="typingLine">typing…</div>
+        <div class="msg-compose hidden" id="composeBox">
+          <textarea id="msgBody" rows="2" placeholder="Type a message…"></textarea>
+          <button class="btn btn-primary btn-sm" id="sendMsg">Send</button>
+        </div>
+      </section>
     </div>`;
 
-  async function paint() {
-    const list = $('#msgList');
-    if (!list) return;
-    try {
-      const rows = await api('/api/messages');
-      const wasAtBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 80;
-      if (!rows.length) {
-        list.innerHTML = '<div class="empty">No messages yet.</div>';
-      } else {
-        list.innerHTML = rows.map(m => {
-          const mine = m.from_user_id === user.id || (isAdmin && m.sender_role === 'admin');
-          const name = m.from_name || (m.sender_role === 'admin' ? 'Salon' : 'Client');
-          const time = new Date(m.created_at).toLocaleString();
-          const replyBtn = (isAdmin && m.sender_role === 'client' && m.from_user_id)
-            ? `<button type="button" class="msg-reply" data-uid="${esc(m.from_user_id)}" data-name="${esc(name)}">Reply</button>`
-            : '';
-          return `<div class="msg-row ${mine ? 'mine' : 'theirs'}"><div class="msg-bubble"><div class="meta">${esc(name)} · ${esc(time)}</div><div class="msg-text">${esc(m.body)}</div>${replyBtn}</div></div>`;
-        }).join('');
-      }
-      if (wasAtBottom || rows.length !== lastMsgCount) list.scrollTop = list.scrollHeight;
-      lastMsgCount = rows.length;
-    } catch (e) {
-      list.innerHTML = `<div class="empty">${esc(e.message)}</div>`;
+  const convList = $('#convList');
+  const msgList = $('#msgList');
+  const composeBox = $('#composeBox');
+  const chatPeerName = $('#chatPeerName');
+  const chatPeerStatus = $('#chatPeerStatus');
+  const typingLine = $('#typingLine');
+  const chatBack = $('#chatBack');
+
+  function setActivePeer(peer) {
+    activePeer = peer;
+    replyTarget = peer ? { id: peer.id, name: peer.name } : null;
+    if (peer) {
+      chatPeerName.textContent = peer.name;
+      composeBox.classList.remove('hidden');
+      chatBack.classList.remove('hidden');
+      host.querySelector('.inbox')?.classList.add('chat-open');
+    } else {
+      chatPeerName.textContent = 'Select a chat';
+      chatPeerStatus.textContent = '';
+      composeBox.classList.add('hidden');
+      chatBack.classList.add('hidden');
+      host.querySelector('.inbox')?.classList.remove('chat-open');
+      msgList.innerHTML = '<div class="empty">Choose a conversation on the left</div>';
     }
   }
 
-  function setReply(id, name) {
-    replyTarget = { id, name };
-    const bar = $('#replyBar'), label = $('#replyLabel');
-    if (bar && label) { label.textContent = 'Replying to ' + name; bar.classList.remove('hidden'); }
-    $('#msgBody')?.focus();
-  }
-  function clearReply() {
-    replyTarget = null;
-    $('#replyBar')?.classList.add('hidden');
+  async function loadConversations() {
+    try {
+      const rows = await api('/api/messages/conversations');
+      if (!rows.length) {
+        convList.innerHTML = '<div class="empty">No conversations yet</div>';
+        return rows;
+      }
+      convList.innerHTML = rows.map(c => `
+        <button type="button" class="conv-item ${activePeer && activePeer.id === c.userId ? 'active' : ''}" data-id="${esc(c.userId)}" data-name="${esc(c.name)}">
+          <div class="conv-top">
+            <span class="conv-name">${esc(c.name)}</span>
+            <span class="conv-dot ${c.online ? 'online' : 'offline'}" title="${c.online ? 'Online' : 'Offline'}"></span>
+          </div>
+          <div class="conv-preview">${esc((c.lastMessage || '').slice(0, 48))}${c.lastMessage && c.lastMessage.length > 48 ? '…' : ''}</div>
+          <div class="conv-meta">
+            <span>${c.lastAt ? new Date(c.lastAt).toLocaleString() : ''}</span>
+            ${c.unread > 0 ? `<span class="msg-badge">${c.unread}</span>` : ''}
+          </div>
+        </button>`).join('');
+      return rows;
+    } catch (e) {
+      convList.innerHTML = `<div class="empty">${esc(e.message)}</div>`;
+      return [];
+    }
   }
 
-  host.querySelector('#clearReply')?.addEventListener('click', clearReply);
-  host.addEventListener('click', e => {
-    const btn = e.target.closest('.msg-reply');
-    if (btn) setReply(btn.dataset.uid, btn.dataset.name);
+  async function loadThread(playSound = false) {
+    if (!activePeer) return;
+    try {
+      const data = await api(`/api/messages/thread/${encodeURIComponent(activePeer.id)}`);
+      const rows = data.messages || [];
+      const peer = data.peer || {};
+
+      if (playSound) {
+        for (const m of rows) {
+          if (!knownMsgIds.has(m.id) && m.from_user_id !== user.id) {
+            playMsgSound();
+            break;
+          }
+        }
+      }
+      knownMsgIds = new Set(rows.map(m => m.id));
+
+      chatPeerStatus.innerHTML = peer.online
+        ? '<span class="status-online">Online</span>'
+        : '<span class="status-offline">Offline</span>';
+      typingLine.classList.toggle('hidden', !peer.typing);
+      if (peer.typing) typingLine.textContent = `${activePeer.name.split(' ')[0]} is typing…`;
+
+      const wasAtBottom = msgList.scrollHeight - msgList.scrollTop - msgList.clientHeight < 90;
+      if (!rows.length) {
+        msgList.innerHTML = '<div class="empty">No messages yet. Say hello 👋</div>';
+      } else {
+        msgList.innerHTML = rows.map(m => {
+          const mine = m.from_user_id === user.id;
+          const time = new Date(m.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+          return `<div class="msg-row ${mine ? 'mine' : 'theirs'}"><div class="msg-bubble"><div class="msg-text">${esc(m.body)}</div><div class="meta">${esc(time)}</div></div></div>`;
+        }).join('');
+      }
+      if (wasAtBottom || playSound) msgList.scrollTop = msgList.scrollHeight;
+    } catch (e) {
+      msgList.innerHTML = `<div class="empty">${esc(e.message)}</div>`;
+    }
+  }
+
+  convList.addEventListener('click', async e => {
+    const item = e.target.closest('.conv-item');
+    if (!item) return;
+    setActivePeer({ id: item.dataset.id, name: item.dataset.name });
+    knownMsgIds = new Set();
+    await loadThread(false);
+    await loadConversations();
+    try {
+      const u = await api('/api/messages/unread-count');
+      updateMsgBadge(u.count);
+    } catch {}
   });
+
+  chatBack?.addEventListener('click', async () => {
+    setActivePeer(null);
+    await loadConversations();
+  });
+
+  if (!isAdmin) {
+    const rows = await loadConversations();
+    if (rows[0]) {
+      setActivePeer({ id: rows[0].userId, name: rows[0].name });
+      await loadThread(false);
+    }
+  } else {
+    await loadConversations();
+  }
 
   $('#sendMsg')?.addEventListener('click', async () => {
     const body = $('#msgBody').value.trim();
-    if (!body) return toast('Message is empty');
+    if (!body) return;
+    if (!activePeer?.id) return toast('Select a conversation first');
     try {
-      const payload = { body };
-      if (isAdmin) {
-        if (!replyTarget?.id) return toast('Click Reply on a client message first');
-        payload.toUserId = replyTarget.id;
-      }
-      await api('/api/messages', { method: 'POST', body: JSON.stringify(payload) });
+      await api('/api/messages', {
+        method: 'POST',
+        body: JSON.stringify({ body, toUserId: activePeer.id })
+      });
       $('#msgBody').value = '';
-      await paint();
-      toast('Sent');
+      await loadThread(false);
+      await loadConversations();
     } catch (e) { toast(e.message); }
   });
 
   $('#msgBody')?.addEventListener('keydown', e => {
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('#sendMsg')?.click(); }
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      $('#sendMsg')?.click();
+    }
   });
 
-  await paint();
-  try {
-    const rows = await api('/api/messages');
-    for (const m of rows) {
-      if (m.to_user_id === user.id && !m.read) {
-        api(`/api/messages/${encodeURIComponent(m.id)}/read`, { method: 'PATCH' }).catch(() => {});
-      }
-    }
-    updateMsgBadge(0);
-  } catch {}
-  msgPollTimer = setInterval(paint, 3000);
+  $('#msgBody')?.addEventListener('input', () => {
+    if (!activePeer?.id) return;
+    clearTimeout(typingTimer);
+    api('/api/presence/typing', {
+      method: 'POST',
+      body: JSON.stringify({ toUserId: activePeer.id })
+    }).catch(() => {});
+    typingTimer = setTimeout(() => {
+      api('/api/presence/typing', { method: 'POST', body: JSON.stringify({ toUserId: '' }) }).catch(() => {});
+    }, 2500);
+  });
+
+  msgPollTimer = setInterval(async () => {
+    api('/api/presence/ping', { method: 'POST' }).catch(() => {});
+    await loadConversations();
+    if (activePeer) await loadThread(true);
+    try {
+      const u = await api('/api/messages/unread-count');
+      updateMsgBadge(u.count);
+    } catch {}
+  }, 3000);
 }
 
 async function renderSettings(host) {
