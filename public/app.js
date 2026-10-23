@@ -1276,6 +1276,22 @@ function bindEvents() {
 
 
 
+function mediaAbsUrl(url) {
+  if (!url) return '';
+  if (/^https?:\/\//i.test(url) || url.startsWith('data:')) return url;
+  if (url.startsWith('/')) return location.origin + url;
+  return location.origin + '/' + url.replace(/^\.\//, '');
+}
+
+function closeMediaLightbox() {
+  const lb = $('#mediaLightbox');
+  if (!lb) return;
+  const v = lb.querySelector('video');
+  if (v) { try { v.pause(); v.removeAttribute('src'); v.load(); } catch {} }
+  lb.classList.add('hidden');
+  document.body.style.overflow = '';
+}
+
 function openMediaLightbox(url, isVideo, title) {
   let lb = $('#mediaLightbox');
   if (!lb) {
@@ -1286,28 +1302,59 @@ function openMediaLightbox(url, isVideo, title) {
       <button type="button" class="lb-close" aria-label="Close">×</button>
       <div class="lb-inner"></div>`;
     document.body.appendChild(lb);
-    lb.querySelector('.lb-close').addEventListener('click', () => lb.classList.add('hidden'));
-    lb.addEventListener('click', e => { if (e.target === lb) lb.classList.add('hidden'); });
+    lb.querySelector('.lb-close').addEventListener('click', e => {
+      e.preventDefault();
+      e.stopPropagation();
+      closeMediaLightbox();
+    });
+    lb.addEventListener('click', e => {
+      if (e.target === lb) closeMediaLightbox();
+    });
     document.addEventListener('keydown', e => {
-      if (e.key === 'Escape') lb.classList.add('hidden');
+      if (e.key === 'Escape') closeMediaLightbox();
     });
   }
+  const src = mediaAbsUrl(url);
   const inner = lb.querySelector('.lb-inner');
   if (isVideo) {
-    inner.innerHTML = `<video src="${esc(url)}" controls autoplay playsinline></video>`;
+    inner.innerHTML = `
+      <video controls playsinline webkit-playsinline preload="auto" src="${esc(src)}"></video>
+      <p class="lb-hint">Tap play if it does not start automatically</p>`;
+    const video = inner.querySelector('video');
+    // Try play (may need user gesture — already inside click handler)
+    const tryPlay = () => {
+      const p = video.play();
+      if (p && p.catch) p.catch(() => {});
+    };
+    video.addEventListener('loadeddata', tryPlay, { once: true });
+    setTimeout(tryPlay, 100);
   } else {
-    inner.innerHTML = `<img src="${esc(url)}" alt="${esc(title || '')}">`;
+    inner.innerHTML = `<img src="${esc(src)}" alt="${esc(title || 'Photo')}" />`;
   }
   lb.classList.remove('hidden');
+  document.body.style.overflow = 'hidden';
+}
+
+function commentAuthorName() {
+  if (user && (user.fullName || user.email)) {
+    return String(user.fullName || user.email).trim();
+  }
+  return '';
 }
 
 function bindGalleryCardActions(root) {
   root.querySelectorAll('[data-open-media]').forEach(el => {
-    el.addEventListener('click', e => {
+    const open = e => {
       e.preventDefault();
       e.stopPropagation();
-      openMediaLightbox(el.dataset.openMedia, el.dataset.mediaType === 'video', el.dataset.title || '');
-    });
+      openMediaLightbox(el.getAttribute('data-open-media'), el.getAttribute('data-media-type') === 'video', el.getAttribute('data-title') || '');
+    };
+    el.addEventListener('click', open);
+    el.addEventListener('touchend', e => {
+      // avoid double-fire with click on some phones
+      if (e.cancelable) e.preventDefault();
+      open(e);
+    }, { passive: false });
   });
   root.querySelectorAll('.gal-like').forEach(btn => {
     btn.addEventListener('click', async e => {
@@ -1336,32 +1383,39 @@ function bindGalleryCardActions(root) {
       box.innerHTML = '<div class="loading">Loading…</div>';
       try {
         const comments = await api(`/api/gallery/${encodeURIComponent(id)}/comments`);
+        const autoName = commentAuthorName();
+        const nameField = autoName
+          ? `<p class="gc-as">Commenting as <strong>${esc(autoName)}</strong></p>
+             <input type="hidden" name="authorName" value="${esc(autoName)}">`
+          : `<input name="authorName" placeholder="Your name (optional)" maxlength="60">`;
         box.innerHTML = `
           <div class="gc-list">${comments.length ? comments.map(c => `
             <div class="gc-item"><strong>${esc(c.author_name)}</strong> ${esc(c.body)}
             <div class="meta">${new Date(c.created_at).toLocaleString()}</div></div>`).join('') : '<p class="muted">No comments yet. Be the first.</p>'}
           </div>
           <form class="gc-form" data-id="${esc(id)}">
-            <input name="authorName" placeholder="Your name" maxlength="60">
-            <input name="body" placeholder="Write a comment…" required maxlength="500">
+            ${nameField}
+            <input name="body" placeholder="Write a comment…" required maxlength="500" autocomplete="off">
             <button type="submit" class="btn btn-primary btn-sm">Post comment</button>
           </form>`;
         box.querySelector('.gc-form')?.addEventListener('submit', async ev => {
           ev.preventDefault();
           const f = ev.target;
+          const name = (f.authorName && f.authorName.value) ? f.authorName.value.trim() : (commentAuthorName() || 'Guest');
           try {
             await api(`/api/gallery/${encodeURIComponent(id)}/comments`, {
               method: 'POST',
               body: JSON.stringify({
-                authorName: f.authorName.value,
+                authorName: name,
                 body: f.body.value,
                 visitorKey: visitorKey()
               })
             });
             f.body.value = '';
             toast('Comment posted');
+            // refresh list
+            box.classList.add('hidden');
             btn.click();
-            setTimeout(() => btn.click(), 0);
           } catch (err) { toast(err.message); }
         });
       } catch (err) { box.innerHTML = `<p class="muted">${esc(err.message)}</p>`; }
@@ -1386,12 +1440,14 @@ function galleryCardHtml(g, { admin = false } = {}) {
   const isVideo = g.media_type === 'video';
   const src = g.image_url || '';
   const title = g.title || (isVideo ? 'Video' : 'Photo');
+  // #t=0.1 helps some browsers show a video frame as thumbnail
+  const thumbSrc = isVideo ? (src + (src.includes('#') ? '' : '#t=0.1')) : src;
   return `
     <article class="gallery-card gallery-item" data-id="${esc(g.id)}">
       ${admin ? `<button type="button" class="gal-delete-corner" data-del="${esc(g.id)}" title="Delete">Delete</button>` : ''}
       <button type="button" class="gal-media" data-open-media="${esc(src)}" data-media-type="${isVideo ? 'video' : 'image'}" data-title="${esc(title)}">
         ${isVideo
-          ? `<video src="${esc(src)}" muted playsinline preload="metadata"></video><span class="gal-play">▶ Play</span>`
+          ? `<video src="${esc(thumbSrc)}" muted playsinline preload="metadata"></video><span class="gal-play">▶ Open</span>`
           : `<img src="${esc(src)}" alt="${esc(title)}" loading="lazy">`}
       </button>
       <div class="cap">
@@ -1406,7 +1462,6 @@ function galleryCardHtml(g, { admin = false } = {}) {
       </div>
     </article>`;
 }
-
 
 async function loadGalleryPublic() {
   const grid = $('#galleryGrid');
