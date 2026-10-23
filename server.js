@@ -49,18 +49,15 @@ app.use(helmet({
     }
   }
 }));
-app.use(compression());
+app.use(compression({
+  filter: (req, res) => {
+    if (req.path.startsWith('/api/media') || req.path.startsWith('/api/avatar')) return false;
+    return compression.filter(req, res);
+  }
+}));
 app.use(express.json({ limit: '1mb' }));
 app.use('/api', (req, res, next) => { res.set('Cache-Control', 'no-store'); next(); });
-const uploadsDir = path.join(__dirname, 'public', 'uploads');
-try { fs.mkdirSync(uploadsDir, { recursive: true }); } catch (e) {}
-const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, uploadsDir),
-  filename: (_req, file, cb) => {
-    const ext = (path.extname(file.originalname || '') || '').toLowerCase().replace(/[^a-z0-9.]/g, '');
-    cb(null, Date.now() + '-' + Math.random().toString(36).slice(2, 9) + ext);
-  }
-});
+// Store media in Postgres so files survive Render restarts
 function uploadMiddleware(req, res, next) {
   upload.single('file')(req, res, (err) => {
     if (err) return res.status(400).json({ error: err.message || 'Upload failed' });
@@ -68,8 +65,8 @@ function uploadMiddleware(req, res, next) {
   });
 }
 const upload = multer({
-  storage,
-  limits: { fileSize: 40 * 1024 * 1024 },
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 25 * 1024 * 1024 },
   fileFilter: (_req, file, cb) => {
     if (/^(image|video)\//.test(file.mimetype)) cb(null, true);
     else cb(new Error('Only photos and videos are allowed'));
@@ -324,6 +321,10 @@ async function initDb() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )`);
   await pool.query(`ALTER TABLE gallery ADD COLUMN IF NOT EXISTS media_type TEXT NOT NULL DEFAULT 'image'`);
+  await pool.query(`ALTER TABLE gallery ADD COLUMN IF NOT EXISTS media_data BYTEA`);
+  await pool.query(`ALTER TABLE gallery ADD COLUMN IF NOT EXISTS mime_type TEXT NOT NULL DEFAULT ''`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_data BYTEA`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_mime TEXT NOT NULL DEFAULT ''`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS gallery_likes (
       gallery_id TEXT NOT NULL REFERENCES gallery(id) ON DELETE CASCADE,
@@ -1070,38 +1071,72 @@ app.get('/api/admin/gallery', requireAdmin, asyncRoute(async (req, res) => {
   res.json(r.rows);
 }));
 
+app.get('/api/media/:id', asyncRoute(async (req, res) => {
+  const id = cleanText(req.params.id, 30);
+  const r = await pool.query('SELECT media_data, mime_type, image_url FROM gallery WHERE id=$1 AND active=TRUE', [id]);
+  if (!r.rowCount) return res.status(404).json({ error: 'Not found.' });
+  const row = r.rows[0];
+  if (row.media_data) {
+    res.setHeader('Content-Type', row.mime_type || 'application/octet-stream');
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+    res.setHeader('Accept-Ranges', 'bytes');
+    return res.send(row.media_data);
+  }
+  // Legacy disk path (may be gone after redeploy)
+  if (row.image_url && row.image_url.startsWith('/uploads/')) {
+    return res.status(404).json({ error: 'This file was lost after a server restart. Please upload it again.' });
+  }
+  return res.status(404).json({ error: 'Media missing. Please re-upload.' });
+}));
+
+app.get('/api/avatar/:userId', asyncRoute(async (req, res) => {
+  const id = cleanText(req.params.userId, 30);
+  const r = await pool.query('SELECT avatar_data, avatar_mime, avatar_url FROM users WHERE id=$1', [id]);
+  if (!r.rowCount || !r.rows[0].avatar_data) return res.status(404).end();
+  res.setHeader('Content-Type', r.rows[0].avatar_mime || 'image/jpeg');
+  res.setHeader('Cache-Control', 'public, max-age=3600');
+  res.send(r.rows[0].avatar_data);
+}));
+
 app.post('/api/admin/gallery/upload', requireAdmin, uploadMiddleware, asyncRoute(async (req, res) => {
-  if (!req.file) return res.status(400).json({ error: 'Choose a photo or video.' });
+  if (!req.file || !req.file.buffer) return res.status(400).json({ error: 'Choose a photo or video.' });
+  if (req.file.size > 25 * 1024 * 1024) return res.status(400).json({ error: 'File too large (max 25MB).' });
   const title = cleanText(req.body.title || '', 100);
   const caption = cleanText(req.body.caption || '', 300);
   const media_type = req.file.mimetype.startsWith('video/') ? 'video' : 'image';
-  const image_url = '/uploads/' + req.file.filename;
   const id = makeId('GAL');
+  const image_url = '/api/media/' + id;
+  await pool.query(
+    `INSERT INTO gallery(id,title,caption,image_url,media_type,mime_type,media_data,sort_order,active)
+     VALUES($1,$2,$3,$4,$5,$6,$7,0,TRUE)`,
+    [id, title, caption, image_url, media_type, req.file.mimetype, req.file.buffer]
+  );
   const r = await pool.query(
-    `INSERT INTO gallery(id,title,caption,image_url,media_type,sort_order,active)
-     VALUES($1,$2,$3,$4,$5,0,TRUE) RETURNING *`,
-    [id, title, caption, image_url, media_type]
+    `SELECT id, title, caption, image_url, media_type, created_at,
+            (SELECT COUNT(*)::int FROM gallery_likes l WHERE l.gallery_id = $1) AS likes,
+            (SELECT COUNT(*)::int FROM gallery_comments c WHERE c.gallery_id = $1) AS comments
+     FROM gallery WHERE id=$1`,
+    [id]
   );
   res.status(201).json(r.rows[0]);
 }));
 
 app.delete('/api/admin/gallery/:id', requireAdmin, asyncRoute(async (req, res) => {
   const id = cleanText(req.params.id, 30);
-  const row = await pool.query('SELECT image_url FROM gallery WHERE id=$1', [id]);
   const r = await pool.query(`DELETE FROM gallery WHERE id=$1 RETURNING id`, [id]);
   if (!r.rowCount) return res.status(404).json({ error: 'Not found.' });
-  if (row.rowCount && String(row.rows[0].image_url || '').startsWith('/uploads/')) {
-    const fp = path.join(uploadsDir, path.basename(row.rows[0].image_url));
-    fs.promises.unlink(fp).catch(() => {});
-  }
   res.json({ ok: true });
 }));
 
 app.post('/api/profile/avatar', requireAuth, uploadMiddleware, asyncRoute(async (req, res) => {
-  if (!req.file) return res.status(400).json({ error: 'Choose a photo.' });
+  if (!req.file || !req.file.buffer) return res.status(400).json({ error: 'Choose a photo.' });
   if (!req.file.mimetype.startsWith('image/')) return res.status(400).json({ error: 'Profile photo must be an image.' });
-  const url = '/uploads/' + req.file.filename;
-  await pool.query('UPDATE users SET avatar_url=$1, updated_at=NOW() WHERE id=$2', [url, req.user.id]);
+  if (req.file.size > 5 * 1024 * 1024) return res.status(400).json({ error: 'Photo max 5MB.' });
+  const url = '/api/avatar/' + req.user.id;
+  await pool.query(
+    'UPDATE users SET avatar_url=$1, avatar_data=$2, avatar_mime=$3, updated_at=NOW() WHERE id=$4',
+    [url, req.file.buffer, req.file.mimetype, req.user.id]
+  );
   const updated = await pool.query('SELECT id,email,full_name,phone,role,avatar_url FROM users WHERE id=$1', [req.user.id]);
   res.json(updated.rows[0]);
 }));
