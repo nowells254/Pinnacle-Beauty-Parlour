@@ -9,7 +9,31 @@ let user = null;
 let toastTimer;
 let msgPollTimer = null;
 let replyTarget = null;
+
 let lastMsgCount = 0;
+
+function setAppMode(mode) {
+  // mode: 'app' | 'website'
+  document.body.classList.remove('mode-app', 'mode-website');
+  document.body.classList.add(mode === 'website' ? 'mode-website' : 'mode-app');
+  try { sessionStorage.setItem('pinnacle_mode', mode === 'website' ? 'website' : 'app'); } catch {}
+}
+function goToWebsite() {
+  stopMsgPoll();
+  $('#dashModal')?.classList.add('hidden');
+  document.body.classList.remove('dash-open');
+  setAppMode('website');
+  window.scrollTo(0, 0);
+}
+function goToApp() {
+  setAppMode('app');
+  if (user) openDash();
+  else {
+    $('#dashModal')?.classList.add('hidden');
+    document.body.classList.remove('dash-open');
+  }
+}
+
 
 async function api(url, opts = {}) {
   const headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) };
@@ -250,6 +274,7 @@ function closeDash() {
   stopMsgPoll();
   $('#dashModal').classList.add('hidden');
   document.body.classList.remove('dash-open');
+  // Stay in app mode (login screen) unless user chose website
 }
 
 function renderDashTabs() {
@@ -365,7 +390,8 @@ async function renderAdminBookings(host) {
 async function renderMyBookings(host) {
   const rows = await api('/api/my/bookings');
   if (!rows.length) {
-    host.innerHTML = '<div class="empty">You have no bookings yet. <a href="#booking" onclick="closeDash()">Book now</a></div>';
+    host.innerHTML = '<div class="empty">You have no bookings yet. <button type="button" class="btn btn-primary btn-sm" id="emptyBookNow">Book on website</button></div>';
+    $('#emptyBookNow')?.addEventListener('click', () => { goToWebsite(); location.hash = 'booking'; });
     return;
   }
   host.innerHTML = `
@@ -965,6 +991,7 @@ async function renderProfile(host) {
     user = null;
     updateAuthBtn();
     closeDash();
+    setAppMode('app');
     toast('Signed out');
   });
 }
@@ -1076,7 +1103,12 @@ async function loadPublic() {
 
 function bindEvents() {
   $('#menuToggle')?.addEventListener('click', () => $('#nav').classList.toggle('open'));
-  $('#authBtn')?.addEventListener('click', () => user ? openDash() : openAuth('login'));
+  $('#authBtn')?.addEventListener('click', () => { if (user) { setAppMode('app'); openDash(); } else openAuth('login'); });
+  
+  $('#appHomeLogin')?.addEventListener('click', () => openAuth('login'));
+  $('#appHomeSignup')?.addEventListener('click', () => openAuth('signup'));
+  $('#appHomeToWeb')?.addEventListener('click', goToWebsite);
+
   $('#loginNavBtn')?.addEventListener('click', () => openAuth('login'));
   $('#signupNavBtn')?.addEventListener('click', () => openAuth('signup'));
   $('#dashSignOut')?.addEventListener('click', async () => {
@@ -1094,7 +1126,7 @@ function bindEvents() {
     loadDashTab('profile');
   });
   $('#authClose')?.addEventListener('click', closeAuth);
-  $('#dashClose')?.addEventListener('click', closeDash);
+  $('#dashClose')?.addEventListener('click', goToWebsite);
   $('#successClose')?.addEventListener('click', () => $('#successModal').classList.add('hidden'));
   $('#successDone')?.addEventListener('click', () => $('#successModal').classList.add('hidden'));
 
@@ -1115,6 +1147,7 @@ function bindEvents() {
       updateAuthBtn();
       closeAuth();
       toast(`Welcome, ${d.fullName || d.email}`);
+      setAppMode('app');
       openDash();
     } catch (err) { feedback(fb, err.message, true); }
   });
@@ -1226,6 +1259,23 @@ document.querySelectorAll('.modal').forEach(m => m.classList.add('hidden'));
 bindEvents();
 checkAuth()
   .then(() => loadPublic())
+  .then(() => {
+    // Brand app home
+    if ($('#appHomeName')) $('#appHomeName').textContent = (config.name || 'Pinnacle').split(' ')[0];
+    if ($('#appHomeTag') && config.tagline) $('#appHomeTag').textContent = config.tagline;
+    document.querySelectorAll('#appHome .brand-mark').forEach(el => {
+      el.textContent = logoInitials(config.name || 'P');
+      el.dataset.style = config.logoStyle || 'gradient';
+    });
+    let mode = 'app';
+    try { mode = sessionStorage.getItem('pinnacle_mode') || 'app'; } catch {}
+    if (user) {
+      setAppMode('app');
+      openDash();
+    } else {
+      setAppMode(mode === 'website' ? 'website' : 'app');
+    }
+  })
   .then(() => { if ($('#bookingService')?.value) loadSlots(); })
   .then(async () => {
     if (!user) return;

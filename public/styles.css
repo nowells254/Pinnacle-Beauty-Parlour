@@ -1,3 +1,64 @@
+
+/* —— App vs Website modes —— */
+body.mode-app .website-only { display: none !important; }
+body.mode-website #appHome { display: none !important; }
+body.mode-website.dash-open .website-only { display: none !important; }
+
+.app-home {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 40px 20px;
+  background:
+    radial-gradient(ellipse at 20% 20%, color-mix(in srgb, var(--rose) 25%, transparent), transparent 50%),
+    radial-gradient(ellipse at 80% 80%, color-mix(in srgb, var(--plum) 20%, transparent), transparent 45%),
+    var(--cream);
+}
+.app-home-inner {
+  width: min(420px, 100%);
+  text-align: center;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 24px;
+  padding: 40px 32px;
+  box-shadow: var(--shadow);
+}
+.app-home-brand .brand-mark {
+  margin: 0 auto 16px;
+  width: 56px; height: 56px; font-size: 24px;
+}
+.app-home-brand h1 {
+  margin: 0 0 8px;
+  font-family: 'Playfair Display', serif;
+  font-size: 2rem;
+  color: var(--plum);
+  font-weight: 600;
+}
+.app-home-brand p {
+  margin: 0 0 28px;
+  color: var(--muted);
+  font-size: .95rem;
+  line-height: 1.5;
+}
+.app-home-actions {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+.btn-lg { padding: 14px 20px; font-size: 15px; border-radius: 12px; }
+.app-home-hint {
+  font-size: .8rem;
+  color: var(--muted);
+  margin: 0 0 16px;
+}
+.app-home .text-link {
+  border: 0; background: none; cursor: pointer;
+  font-weight: 600; color: var(--plum); font-size: .9rem;
+}
+.app-home .text-link:hover { color: var(--rose); }
+
+body.theme-dark .app-home-inner { background: #241c28; }
+
 :root {
   --plum: #391b31;
   --plum2: #522b46;
