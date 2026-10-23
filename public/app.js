@@ -82,7 +82,7 @@ async function checkAuth() {
   try {
     const d = await api('/api/me');
     if (d.authenticated) {
-      user = { id: d.id, email: d.email, role: d.role, fullName: d.fullName || '' };
+      user = { id: d.id, email: d.email, role: d.role, fullName: d.fullName || '', avatarUrl: d.avatarUrl || '' };
     } else {
       user = null;
     }
@@ -225,15 +225,25 @@ function openDash() {
   if ($('#dashSideName')) $('#dashSideName').textContent = displayName;
   if ($('#dashSideEmail')) $('#dashSideEmail').textContent = user.email || '';
   if ($('#dashSideRole')) $('#dashSideRole').textContent = user.role === 'admin' ? 'Admin' : 'Client';
-  if ($('#dashAvatar')) {
-    $('#dashAvatar').textContent = logoInitials(displayName);
-  }
+  setUserAvatarUI(displayName, user.avatarUrl);
   document.querySelectorAll('#dashModal .brand-mark').forEach(el => {
     el.textContent = logoInitials(config.name || 'P');
     el.dataset.style = config.logoStyle || 'gradient';
   });
+  $('#dashSidebar')?.classList.remove('nav-open');
   renderDashTabs();
   loadDashTab(user.role === 'admin' ? 'overview' : 'mybookings');
+  // refresh profile for avatar/name
+  api('/api/profile').then(p => {
+    user.fullName = p.full_name || user.fullName;
+    user.avatarUrl = p.avatar_url || '';
+    user.email = p.email || user.email;
+    const dn = (user.fullName && user.fullName.trim()) ? user.fullName.trim() : user.email;
+    if ($('#dashSideName')) $('#dashSideName').textContent = dn;
+    if ($('#dashSideEmail')) $('#dashSideEmail').textContent = user.email || '';
+    if ($('#dashUser')) $('#dashUser').textContent = dn + (user.email ? ' · ' + user.email : '');
+    setUserAvatarUI(dn, user.avatarUrl);
+  }).catch(() => {});
 }
 
 function closeDash() {
@@ -915,6 +925,12 @@ async function renderProfile(host) {
   const p = await api('/api/profile');
   host.innerHTML = `
     <form class="profile-form" id="profileForm">
+      <div class="profile-avatar-row">
+        <img id="profileAvatarPreview" class="profile-avatar-preview ${p.avatar_url ? '' : 'hidden'}" src="${esc(p.avatar_url || '')}" alt="">
+        <div class="dash-avatar" id="profileAvatarFallback">${esc(logoInitials(p.full_name || p.email || 'U'))}</div>
+      </div>
+      <label>Profile photo URL<input name="avatarUrl" value="${esc(p.avatar_url || '')}" placeholder="https://… (link to your photo)"></label>
+      <p class="muted">Paste a photo link (Imgur, Google Drive public link, etc.). Leave blank for initials.</p>
       <label>Full name<input name="fullName" value="${esc(p.full_name || '')}" required></label>
       <label>Email<input name="email" type="email" value="${esc(p.email || '')}" required></label>
       <label>Phone<input name="phone" value="${esc(p.phone || '')}"></label>
@@ -922,6 +938,7 @@ async function renderProfile(host) {
       <p class="muted">Change password (optional)</p>
       <label>Current password<input name="currentPassword" type="password"></label>
       <label>New password<input name="newPassword" type="password" minlength="8"></label>
+      <p class="muted">Forgot password? Sign out, open Log in → Forgot password.</p>
       <button type="submit" class="btn btn-primary btn-sm">Save profile</button>
       <button type="button" class="btn btn-outline btn-sm" id="logoutBtn" style="margin-top:8px">Sign out</button>
     </form>`;
@@ -933,13 +950,13 @@ async function renderProfile(host) {
     if (!body.newPassword) delete body.newPassword;
     try {
       const updated = await api('/api/profile', { method: 'PATCH', body: JSON.stringify(body) });
-      user = { ...user, email: updated.email, fullName: updated.full_name };
+      user = { ...user, email: updated.email, fullName: updated.full_name, avatarUrl: updated.avatar_url || '' };
       updateAuthBtn();
       const dn = (user.fullName && user.fullName.trim()) ? user.fullName.trim() : user.email;
       $('#dashUser').textContent = dn + (user.email ? ' · ' + user.email : '');
       if ($('#dashSideName')) $('#dashSideName').textContent = dn;
       if ($('#dashSideEmail')) $('#dashSideEmail').textContent = user.email || '';
-      if ($('#dashAvatar')) $('#dashAvatar').textContent = logoInitials(dn);
+      setUserAvatarUI(dn, user.avatarUrl);
       toast('Profile updated');
     } catch (err) { toast(err.message); }
   });
@@ -974,6 +991,24 @@ async function renderClients(host) {
         </tbody>
       </table>
     </div>`;
+}
+
+
+function setUserAvatarUI(name, avatarUrl) {
+  const img = $('#dashAvatarImg');
+  const fallback = $('#dashAvatar');
+  const url = (avatarUrl || '').trim();
+  if (img && url) {
+    img.src = url;
+    img.classList.remove('hidden');
+    fallback?.classList.add('hidden');
+  } else {
+    img?.classList.add('hidden');
+    if (fallback) {
+      fallback.classList.remove('hidden');
+      fallback.textContent = logoInitials(name || 'U');
+    }
+  }
 }
 
 function logoInitials(name) {
@@ -1044,6 +1079,20 @@ function bindEvents() {
   $('#authBtn')?.addEventListener('click', () => user ? openDash() : openAuth('login'));
   $('#loginNavBtn')?.addEventListener('click', () => openAuth('login'));
   $('#signupNavBtn')?.addEventListener('click', () => openAuth('signup'));
+  $('#dashSignOut')?.addEventListener('click', async () => {
+    try { await api('/api/auth/logout', { method: 'POST' }); } catch {}
+    user = null;
+    updateAuthBtn();
+    closeDash();
+    toast('Signed out');
+  });
+  $('#dashBurger')?.addEventListener('click', () => {
+    $('#dashSidebar')?.classList.toggle('nav-open');
+  });
+  $('#dashProfileCard')?.addEventListener('click', () => {
+    document.querySelectorAll('.dash-tab').forEach(x => x.classList.remove('active'));
+    loadDashTab('profile');
+  });
   $('#authClose')?.addEventListener('click', closeAuth);
   $('#dashClose')?.addEventListener('click', closeDash);
   $('#successClose')?.addEventListener('click', () => $('#successModal').classList.add('hidden'));

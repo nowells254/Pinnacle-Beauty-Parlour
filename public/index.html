@@ -179,30 +179,35 @@
 
   <!-- Dashboard Modal -->
   <div id="dashModal" class="dash-shell hidden" role="dialog" aria-modal="true">
-    <aside class="dash-sidebar">
+    <aside class="dash-sidebar" id="dashSidebar">
       <div class="dash-side-brand">
         <span class="brand-mark" id="dashBrandMark">P</span>
         <div>
           <strong id="dashSideBiz">Pinnacle</strong>
           <small>WORKSPACE</small>
         </div>
+        <button type="button" class="dash-burger" id="dashBurger" aria-label="Menu">☰</button>
       </div>
-      <div class="dash-user-card">
+      <button type="button" class="dash-user-card" id="dashProfileCard" title="Open profile">
+        <img class="dash-avatar-img hidden" id="dashAvatarImg" alt="">
         <div class="dash-avatar" id="dashAvatar">U</div>
         <div class="dash-user-meta">
           <strong id="dashSideName">Account</strong>
           <small id="dashSideEmail"></small>
           <span class="dash-plan" id="dashSideRole">Member</span>
         </div>
-      </div>
+      </button>
       <nav class="dash-nav" id="dashTabs"></nav>
-      <button type="button" class="dash-exit" id="dashClose">Go to website</button>
     </aside>
     <section class="dash-main">
       <header class="dash-topbar">
         <div>
           <h2 id="dashTitle">Dashboard</h2>
           <p id="dashUser" class="muted"></p>
+        </div>
+        <div class="dash-top-actions">
+          <button type="button" class="btn btn-outline btn-sm" id="dashClose">Go to website</button>
+          <button type="button" class="btn btn-primary btn-sm" id="dashSignOut">Sign out</button>
         </div>
       </header>
       <div id="dashContent" class="dash-content"></div>

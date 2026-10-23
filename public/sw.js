@@ -1,32 +1,17 @@
-const CACHE = 'pinnacle-shell-v9';
-const SHELL = ['/', '/styles.css', '/app.js', '/manifest.webmanifest', '/icon-192.png', '/icon-512.png'];
-
-self.addEventListener('install', e => {
-  e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)));
-  self.skipWaiting();
-});
-
+const CACHE = 'pinnacle-shell-v10';
+// Network-first for HTML/JS/CSS so deploys show up without Incognito
+self.addEventListener('install', e => { self.skipWaiting(); });
 self.addEventListener('activate', e => {
   e.waitUntil(
-    caches.keys().then(keys =>
-      Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k)))
-    )
+    caches.keys().then(keys => Promise.all(keys.map(k => caches.delete(k)))).then(() => self.clients.claim())
   );
-  self.clients.claim();
 });
-
 self.addEventListener('fetch', e => {
   const u = new URL(e.request.url);
-  if (e.request.method !== 'GET' || u.origin !== location.origin || u.pathname.startsWith('/api/')) return;
+  if (e.request.method !== 'GET' || u.origin !== location.origin) return;
+  if (u.pathname.startsWith('/api/')) return;
+  // Always try network first for app files
   e.respondWith(
-    fetch(e.request)
-      .then(r => {
-        if (r.ok) {
-          const copy = r.clone();
-          caches.open(CACHE).then(c => c.put(e.request, copy));
-        }
-        return r;
-      })
-      .catch(() => caches.match(e.request).then(r => r || caches.match('/')))
+    fetch(e.request).then(r => r).catch(() => caches.match(e.request))
   );
 });
