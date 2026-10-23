@@ -1316,20 +1316,24 @@ function openMediaLightbox(url, isVideo, title) {
   }
   const src = mediaAbsUrl(url);
   const inner = lb.querySelector('.lb-inner');
-  if (isVideo) {
+  if (!src || src.includes('/uploads/')) {
+    inner.innerHTML = `<div class="lb-error">
+      <p><strong>This file is no longer available</strong></p>
+      <p>It was lost after a server update. Delete it in Gallery and upload it again.</p>
+    </div>`;
+  } else if (isVideo) {
     inner.innerHTML = `
       <video controls playsinline webkit-playsinline preload="auto" src="${esc(src)}"></video>
-      <p class="lb-hint">Tap play if it does not start automatically</p>`;
+      <p class="lb-hint">Tap the play button to watch</p>`;
     const video = inner.querySelector('video');
-    // Try play (may need user gesture — already inside click handler)
-    const tryPlay = () => {
-      const p = video.play();
-      if (p && p.catch) p.catch(() => {});
-    };
+    video.addEventListener('error', () => {
+      inner.innerHTML = `<div class="lb-error"><p>Could not load this video. Delete it and upload again.</p></div>`;
+    });
+    const tryPlay = () => { const p = video.play(); if (p && p.catch) p.catch(() => {}); };
     video.addEventListener('loadeddata', tryPlay, { once: true });
-    setTimeout(tryPlay, 100);
+    setTimeout(tryPlay, 150);
   } else {
-    inner.innerHTML = `<img src="${esc(src)}" alt="${esc(title || 'Photo')}" />`;
+    inner.innerHTML = `<img src="${esc(src)}" alt="${esc(title || 'Photo')}" onerror="this.parentNode.innerHTML='<div class=lb-error><p>Photo missing. Delete and re-upload.</p></div>'" />`;
   }
   lb.classList.remove('hidden');
   document.body.style.overflow = 'hidden';

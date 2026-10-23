@@ -322,6 +322,8 @@ async function initDb() {
     )`);
   await pool.query(`ALTER TABLE gallery ADD COLUMN IF NOT EXISTS media_type TEXT NOT NULL DEFAULT 'image'`);
   await pool.query(`ALTER TABLE gallery ADD COLUMN IF NOT EXISTS media_data BYTEA`);
+  // Remove broken disk uploads that no longer exist after Render restarts
+  await pool.query(`DELETE FROM gallery WHERE image_url LIKE '/uploads/%' AND media_data IS NULL`);
   await pool.query(`ALTER TABLE gallery ADD COLUMN IF NOT EXISTS mime_type TEXT NOT NULL DEFAULT ''`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_data BYTEA`);
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_mime TEXT NOT NULL DEFAULT ''`);

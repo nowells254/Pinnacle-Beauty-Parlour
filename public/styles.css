@@ -569,3 +569,9 @@ input[type=file] {
   background: #000;
 }
 .gal-media { -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+
+.lb-error {
+  background: #1a1a1a; color: #eee; padding: 28px 24px; border-radius: 16px;
+  max-width: 360px; text-align: center; line-height: 1.5;
+}
+.lb-error strong { color: #fff; }
