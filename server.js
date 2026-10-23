@@ -7,6 +7,8 @@ const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
 const { Pool } = require('pg');
 const path = require('path');
+const fs = require('fs');
+const multer = require('multer');
 
 const app = express();
 const isProd = process.env.NODE_ENV === 'production';
@@ -38,7 +40,8 @@ app.use(helmet({
       defaultSrc: ["'self'"],
       styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
       fontSrc: ["'self'", 'https://fonts.gstatic.com', 'data:'],
-      imgSrc: ["'self'", 'data:'],
+      imgSrc: ["'self'", 'data:', 'blob:'],
+      mediaSrc: ["'self'", 'blob:'],
       scriptSrc: ["'self'"],
       connectSrc: ["'self'"],
       objectSrc: ["'none'"],
@@ -47,8 +50,31 @@ app.use(helmet({
   }
 }));
 app.use(compression());
-app.use(express.json({ limit: '50kb' }));
+app.use(express.json({ limit: '1mb' }));
 app.use('/api', (req, res, next) => { res.set('Cache-Control', 'no-store'); next(); });
+const uploadsDir = path.join(__dirname, 'public', 'uploads');
+try { fs.mkdirSync(uploadsDir, { recursive: true }); } catch (e) {}
+const storage = multer.diskStorage({
+  destination: (_req, _file, cb) => cb(null, uploadsDir),
+  filename: (_req, file, cb) => {
+    const ext = (path.extname(file.originalname || '') || '').toLowerCase().replace(/[^a-z0-9.]/g, '');
+    cb(null, Date.now() + '-' + Math.random().toString(36).slice(2, 9) + ext);
+  }
+});
+function uploadMiddleware(req, res, next) {
+  upload.single('file')(req, res, (err) => {
+    if (err) return res.status(400).json({ error: err.message || 'Upload failed' });
+    next();
+  });
+}
+const upload = multer({
+  storage,
+  limits: { fileSize: 40 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    if (/^(image|video)\//.test(file.mimetype)) cb(null, true);
+    else cb(new Error('Only photos and videos are allowed'));
+  }
+});
 app.use(express.static(path.join(__dirname, 'public'), { maxAge: isProd ? '1h' : 0, etag: true }));
 
 function signToken(payload) {
@@ -292,10 +318,29 @@ async function initDb() {
       title TEXT NOT NULL DEFAULT '',
       caption TEXT NOT NULL DEFAULT '',
       image_url TEXT NOT NULL,
+      media_type TEXT NOT NULL DEFAULT 'image',
       sort_order INTEGER NOT NULL DEFAULT 0,
       active BOOLEAN NOT NULL DEFAULT TRUE,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )`);
+  await pool.query(`ALTER TABLE gallery ADD COLUMN IF NOT EXISTS media_type TEXT NOT NULL DEFAULT 'image'`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS gallery_likes (
+      gallery_id TEXT NOT NULL REFERENCES gallery(id) ON DELETE CASCADE,
+      visitor_key TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (gallery_id, visitor_key)
+    )`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS gallery_comments (
+      id TEXT PRIMARY KEY,
+      gallery_id TEXT NOT NULL REFERENCES gallery(id) ON DELETE CASCADE,
+      visitor_key TEXT NOT NULL DEFAULT '',
+      author_name TEXT NOT NULL DEFAULT 'Guest',
+      body TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS gallery_comments_gid ON gallery_comments(gallery_id, created_at DESC)`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS reviews (
@@ -312,6 +357,8 @@ async function initDb() {
 
   // staff = users with role admin; allow promoting clients via admin endpoint
 
+
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url TEXT NOT NULL DEFAULT ''`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS salon_settings (
@@ -463,7 +510,7 @@ app.post('/api/auth/reset-password', loginLimiter, asyncRoute(async (req, res) =
 }));
 
 app.get('/api/profile', requireAuth, asyncRoute(async (req, res) => {
-  const r = await pool.query('SELECT id,email,full_name,phone,role,created_at FROM users WHERE id=$1', [req.user.id]);
+  const r = await pool.query('SELECT id,email,full_name,phone,role,avatar_url,created_at FROM users WHERE id=$1', [req.user.id]);
   if (!r.rowCount) return res.status(404).json({ error: 'User not found.' });
   res.json(r.rows[0]);
 }));
@@ -964,35 +1011,101 @@ app.get('/api/admin/bookings/export', requireAdmin, asyncRoute(async (req, res) 
 
 // —— Gallery public + admin ——
 app.get('/api/gallery', asyncRoute(async (req, res) => {
-  const r = await pool.query(`SELECT id, title, caption, image_url, sort_order FROM gallery WHERE active=TRUE ORDER BY sort_order, created_at DESC LIMIT 60`);
+  const r = await pool.query(`
+    SELECT g.id, g.title, g.caption, g.image_url, COALESCE(g.media_type,'image') AS media_type, g.created_at,
+           (SELECT COUNT(*)::int FROM gallery_likes l WHERE l.gallery_id = g.id) AS likes,
+           (SELECT COUNT(*)::int FROM gallery_comments c WHERE c.gallery_id = g.id) AS comments
+    FROM gallery g
+    WHERE g.active = TRUE
+    ORDER BY g.sort_order, g.created_at DESC
+    LIMIT 80`);
   res.json(r.rows);
+}));
+
+app.get('/api/gallery/:id/comments', asyncRoute(async (req, res) => {
+  const id = cleanText(req.params.id, 30);
+  const r = await pool.query(
+    `SELECT id, author_name, body, created_at FROM gallery_comments WHERE gallery_id=$1 ORDER BY created_at DESC LIMIT 50`,
+    [id]
+  );
+  res.json(r.rows);
+}));
+
+app.post('/api/gallery/:id/like', asyncRoute(async (req, res) => {
+  const id = cleanText(req.params.id, 30);
+  const key = cleanText(req.body.visitorKey || req.ip || 'anon', 80) || 'anon';
+  const exists = await pool.query('SELECT 1 FROM gallery WHERE id=$1 AND active=TRUE', [id]);
+  if (!exists.rowCount) return res.status(404).json({ error: 'Not found.' });
+  await pool.query(
+    `INSERT INTO gallery_likes(gallery_id, visitor_key) VALUES($1,$2) ON CONFLICT DO NOTHING`,
+    [id, key]
+  );
+  const c = await pool.query('SELECT COUNT(*)::int AS n FROM gallery_likes WHERE gallery_id=$1', [id]);
+  res.json({ likes: c.rows[0].n });
+}));
+
+app.post('/api/gallery/:id/comments', asyncRoute(async (req, res) => {
+  const id = cleanText(req.params.id, 30);
+  const body = cleanText(req.body.body, 500);
+  const author = cleanText(req.body.authorName || 'Guest', 60) || 'Guest';
+  const key = cleanText(req.body.visitorKey || '', 80);
+  if (body.length < 1) return res.status(400).json({ error: 'Comment cannot be empty.' });
+  const exists = await pool.query('SELECT 1 FROM gallery WHERE id=$1 AND active=TRUE', [id]);
+  if (!exists.rowCount) return res.status(404).json({ error: 'Not found.' });
+  const cid = makeId('GCM');
+  const r = await pool.query(
+    `INSERT INTO gallery_comments(id,gallery_id,visitor_key,author_name,body) VALUES($1,$2,$3,$4,$5)
+     RETURNING id, author_name, body, created_at`,
+    [cid, id, key, author, body]
+  );
+  res.status(201).json(r.rows[0]);
 }));
 
 app.get('/api/admin/gallery', requireAdmin, asyncRoute(async (req, res) => {
-  const r = await pool.query(`SELECT * FROM gallery ORDER BY sort_order, created_at DESC`);
+  const r = await pool.query(`
+    SELECT g.*,
+      (SELECT COUNT(*)::int FROM gallery_likes l WHERE l.gallery_id = g.id) AS likes,
+      (SELECT COUNT(*)::int FROM gallery_comments c WHERE c.gallery_id = g.id) AS comments
+    FROM gallery g ORDER BY g.sort_order, g.created_at DESC`);
   res.json(r.rows);
 }));
 
-app.post('/api/admin/gallery', requireAdmin, asyncRoute(async (req, res) => {
-  const title = cleanText(req.body.title, 100);
-  const caption = cleanText(req.body.caption, 300);
-  const image_url = cleanText(req.body.image_url, 500);
-  if (!image_url || !/^https?:\/\//i.test(image_url)) return res.status(400).json({ error: 'Provide a valid image URL (https://...).' });
+app.post('/api/admin/gallery/upload', requireAdmin, uploadMiddleware, asyncRoute(async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'Choose a photo or video.' });
+  const title = cleanText(req.body.title || '', 100);
+  const caption = cleanText(req.body.caption || '', 300);
+  const media_type = req.file.mimetype.startsWith('video/') ? 'video' : 'image';
+  const image_url = '/uploads/' + req.file.filename;
   const id = makeId('GAL');
   const r = await pool.query(
-    `INSERT INTO gallery(id,title,caption,image_url,sort_order,active) VALUES($1,$2,$3,$4,$5,TRUE) RETURNING *`,
-    [id, title, caption, image_url, Number(req.body.sort_order) || 0]
+    `INSERT INTO gallery(id,title,caption,image_url,media_type,sort_order,active)
+     VALUES($1,$2,$3,$4,$5,0,TRUE) RETURNING *`,
+    [id, title, caption, image_url, media_type]
   );
   res.status(201).json(r.rows[0]);
 }));
 
 app.delete('/api/admin/gallery/:id', requireAdmin, asyncRoute(async (req, res) => {
-  const r = await pool.query(`DELETE FROM gallery WHERE id=$1 RETURNING id`, [cleanText(req.params.id, 30)]);
+  const id = cleanText(req.params.id, 30);
+  const row = await pool.query('SELECT image_url FROM gallery WHERE id=$1', [id]);
+  const r = await pool.query(`DELETE FROM gallery WHERE id=$1 RETURNING id`, [id]);
   if (!r.rowCount) return res.status(404).json({ error: 'Not found.' });
+  if (row.rowCount && String(row.rows[0].image_url || '').startsWith('/uploads/')) {
+    const fp = path.join(uploadsDir, path.basename(row.rows[0].image_url));
+    fs.promises.unlink(fp).catch(() => {});
+  }
   res.json({ ok: true });
 }));
 
-// —— Reviews ——
+app.post('/api/profile/avatar', requireAuth, uploadMiddleware, asyncRoute(async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'Choose a photo.' });
+  if (!req.file.mimetype.startsWith('image/')) return res.status(400).json({ error: 'Profile photo must be an image.' });
+  const url = '/uploads/' + req.file.filename;
+  await pool.query('UPDATE users SET avatar_url=$1, updated_at=NOW() WHERE id=$2', [url, req.user.id]);
+  const updated = await pool.query('SELECT id,email,full_name,phone,role,avatar_url FROM users WHERE id=$1', [req.user.id]);
+  res.json(updated.rows[0]);
+}));
+
 app.get('/api/reviews', asyncRoute(async (req, res) => {
   const r = await pool.query(`SELECT id, customer_name, rating, comment, created_at FROM reviews WHERE approved=TRUE ORDER BY created_at DESC LIMIT 40`);
   res.json(r.rows);
