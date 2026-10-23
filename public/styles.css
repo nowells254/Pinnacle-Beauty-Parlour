@@ -346,3 +346,29 @@ body.theme-dark .modal-card, body.theme-dark .about-section, body.theme-dark .in
 }
 body.theme-dark .msg-list { background: #1a1520; }
 body.theme-dark .conv-list { background: #1a1520; }
+
+
+.nav-text-btn {
+  border: 0; background: transparent; color: var(--plum);
+  font-weight: 700; font-size: 13px; cursor: pointer; padding: 10px 12px;
+}
+.nav-text-btn:hover { color: var(--rose); }
+.dash-user-card {
+  display: flex; align-items: center; gap: 12px;
+  background: #ffffff14; border: 1px solid #ffffff22;
+  border-radius: 14px; padding: 12px; margin-bottom: 8px;
+}
+.dash-avatar {
+  width: 42px; height: 42px; border-radius: 50%;
+  background: linear-gradient(135deg, var(--rose), #fff);
+  color: var(--plum); font-weight: 800; font-size: 14px;
+  display: grid; place-items: center; flex-shrink: 0;
+}
+.dash-user-meta strong { display: block; color: #fff; font-size: .9rem; line-height: 1.2; }
+.dash-user-meta small { display: block; color: #f0d6de; font-size: .72rem; margin-top: 2px; word-break: break-all; }
+.dash-plan {
+  display: inline-block; margin-top: 6px; font-size: .65rem; font-weight: 700;
+  letter-spacing: .04em; text-transform: uppercase;
+  background: #ffffff22; color: #fff; padding: 3px 8px; border-radius: 999px;
+}
+.dash-side-brand small { letter-spacing: .12em; font-size: .65rem; opacity: .7; }

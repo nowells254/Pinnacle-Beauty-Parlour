@@ -25,7 +25,9 @@
       <a href="#reviews">Reviews</a>
       <a href="#about">Our story</a>
       <a href="#booking">Book now</a>
-      <button id="authBtn" class="nav-owner">Sign in</button>
+      <button type="button" id="loginNavBtn" class="nav-text-btn">Log in</button>
+      <button type="button" id="signupNavBtn" class="nav-owner">Create account</button>
+      <button type="button" id="authBtn" class="nav-owner hidden">My account</button>
     </nav>
     <button id="menuToggle" class="menu-toggle" aria-label="Toggle menu">☰</button>
   </header>
@@ -181,12 +183,20 @@
       <div class="dash-side-brand">
         <span class="brand-mark" id="dashBrandMark">P</span>
         <div>
-          <strong id="dashSideName">Dashboard</strong>
-          <small id="dashSideRole">Account</small>
+          <strong id="dashSideBiz">Pinnacle</strong>
+          <small>WORKSPACE</small>
+        </div>
+      </div>
+      <div class="dash-user-card">
+        <div class="dash-avatar" id="dashAvatar">U</div>
+        <div class="dash-user-meta">
+          <strong id="dashSideName">Account</strong>
+          <small id="dashSideEmail"></small>
+          <span class="dash-plan" id="dashSideRole">Member</span>
         </div>
       </div>
       <nav class="dash-nav" id="dashTabs"></nav>
-      <button type="button" class="dash-exit" id="dashClose">← Back to website</button>
+      <button type="button" class="dash-exit" id="dashClose">Go to website</button>
     </aside>
     <section class="dash-main">
       <header class="dash-topbar">

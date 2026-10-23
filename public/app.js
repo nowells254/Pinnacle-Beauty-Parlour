@@ -62,10 +62,19 @@ function switchAuthTab(tab) {
 
 function updateAuthBtn() {
   const btn = $('#authBtn');
+  const loginBtn = $('#loginNavBtn');
+  const signupBtn = $('#signupNavBtn');
   if (user) {
-    btn.textContent = user.role === 'admin' ? 'Owner dashboard' : 'My account';
+    if (btn) {
+      btn.textContent = user.role === 'admin' ? 'Owner dashboard' : 'My account';
+      btn.classList.remove('hidden');
+    }
+    loginBtn?.classList.add('hidden');
+    signupBtn?.classList.add('hidden');
   } else {
-    btn.textContent = 'Sign in';
+    if (btn) btn.classList.add('hidden');
+    loginBtn?.classList.remove('hidden');
+    signupBtn?.classList.remove('hidden');
   }
 }
 
@@ -209,11 +218,16 @@ function openDash() {
   if (!user) return openAuth('login');
   $('#dashModal').classList.remove('hidden');
   document.body.classList.add('dash-open');
-  const title = user.role === 'admin' ? 'Owner Dashboard' : 'My account';
-  $('#dashTitle').textContent = title;
-  $('#dashUser').textContent = `${user.fullName || user.email} · ${user.role}`;
-  if ($('#dashSideName')) $('#dashSideName').textContent = config.name?.split(' ')[0] || 'Pinnacle';
-  if ($('#dashSideRole')) $('#dashSideRole').textContent = user.role === 'admin' ? 'Salon admin' : 'Client account';
+  const displayName = (user.fullName && user.fullName.trim()) ? user.fullName.trim() : (user.email || 'Account');
+  $('#dashTitle').textContent = user.role === 'admin' ? 'Overview' : 'My account';
+  $('#dashUser').textContent = displayName + (user.email ? ' · ' + user.email : '');
+  if ($('#dashSideBiz')) $('#dashSideBiz').textContent = (config.name || 'Pinnacle').split(' ')[0];
+  if ($('#dashSideName')) $('#dashSideName').textContent = displayName;
+  if ($('#dashSideEmail')) $('#dashSideEmail').textContent = user.email || '';
+  if ($('#dashSideRole')) $('#dashSideRole').textContent = user.role === 'admin' ? 'Admin' : 'Client';
+  if ($('#dashAvatar')) {
+    $('#dashAvatar').textContent = logoInitials(displayName);
+  }
   document.querySelectorAll('#dashModal .brand-mark').forEach(el => {
     el.textContent = logoInitials(config.name || 'P');
     el.dataset.style = config.logoStyle || 'gradient';
@@ -921,7 +935,11 @@ async function renderProfile(host) {
       const updated = await api('/api/profile', { method: 'PATCH', body: JSON.stringify(body) });
       user = { ...user, email: updated.email, fullName: updated.full_name };
       updateAuthBtn();
-      $('#dashUser').textContent = `${user.fullName || user.email} · ${user.role}`;
+      const dn = (user.fullName && user.fullName.trim()) ? user.fullName.trim() : user.email;
+      $('#dashUser').textContent = dn + (user.email ? ' · ' + user.email : '');
+      if ($('#dashSideName')) $('#dashSideName').textContent = dn;
+      if ($('#dashSideEmail')) $('#dashSideEmail').textContent = user.email || '';
+      if ($('#dashAvatar')) $('#dashAvatar').textContent = logoInitials(dn);
       toast('Profile updated');
     } catch (err) { toast(err.message); }
   });
@@ -1024,6 +1042,8 @@ async function loadPublic() {
 function bindEvents() {
   $('#menuToggle')?.addEventListener('click', () => $('#nav').classList.toggle('open'));
   $('#authBtn')?.addEventListener('click', () => user ? openDash() : openAuth('login'));
+  $('#loginNavBtn')?.addEventListener('click', () => openAuth('login'));
+  $('#signupNavBtn')?.addEventListener('click', () => openAuth('signup'));
   $('#authClose')?.addEventListener('click', closeAuth);
   $('#dashClose')?.addEventListener('click', closeDash);
   $('#successClose')?.addEventListener('click', () => $('#successModal').classList.add('hidden'));
@@ -1152,6 +1172,8 @@ async function loadReviewsPublic() {
 
 // Boot - force all modals closed on load
 document.querySelectorAll('.modal').forEach(m => m.classList.add('hidden'));
+  document.body.classList.remove('dash-open');
+  $('#dashModal')?.classList.add('hidden');
 bindEvents();
 checkAuth()
   .then(() => loadPublic())
