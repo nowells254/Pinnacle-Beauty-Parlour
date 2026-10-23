@@ -746,59 +746,47 @@ async function renderAdminGallery(host) {
     <form id="galForm" class="service-form" style="margin-bottom:16px">
       <label>Title<input name="title" placeholder="Style name (optional)"></label>
       <label>Caption<input name="caption" placeholder="Optional note"></label>
-      <label>Photo from your device
-        <input type="file" id="galFile" accept="image/*" required>
+      <label>Photo or video from your device
+        <input type="file" id="galFile" accept="image/*,video/*" required>
       </label>
-      <div id="galPreviewWrap" class="upload-preview hidden"><img id="galPreview" alt="Preview"></div>
-      <button type="submit" class="btn btn-primary btn-sm" id="galSubmit">Upload photo</button>
+      <p class="muted">Photos and videos from your gallery. Max ~40MB for video.</p>
+      <button type="submit" class="btn btn-primary btn-sm" id="galSubmit">Upload</button>
     </form>
     <div class="gallery-grid">
       ${rows.length ? rows.map(g => `
         <article class="gallery-card">
-          <img src="${esc(g.image_url)}" alt="${esc(g.title)}" loading="lazy">
-          <div class="cap"><strong>${esc(g.title || 'Photo')}</strong>${esc(g.caption || '')}
+          ${g.media_type === 'video'
+            ? `<video src="${esc(g.image_url)}" controls playsinline preload="metadata"></video>`
+            : `<img src="${esc(g.image_url)}" alt="${esc(g.title)}" loading="lazy">`}
+          <div class="cap">
+            <strong>${esc(g.title || (g.media_type === 'video' ? 'Video' : 'Photo'))}</strong>
+            ${esc(g.caption || '')}
+            <div class="gal-meta">♥ ${g.likes || 0} · 💬 ${g.comments || 0}</div>
             <button type="button" class="btn-sm btn-delete" data-del="${esc(g.id)}" style="margin-top:8px">Delete</button>
           </div>
-        </article>`).join('') : '<div class="empty">No gallery photos yet. Upload from your phone or computer.</div>'}
+        </article>`).join('') : '<div class="empty">No media yet. Upload photos or videos from your device.</div>'}
     </div>`;
-  let pendingDataUrl = '';
-  $('#galFile')?.addEventListener('change', async e => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    try {
-      toast('Preparing photo…');
-      pendingDataUrl = await readImageFileAsDataUrl(file, 1000, 0.7);
-      const wrap = $('#galPreviewWrap');
-      const img = $('#galPreview');
-      if (img) img.src = pendingDataUrl;
-      wrap?.classList.remove('hidden');
-      toast('Photo ready — tap Upload');
-    } catch (err) { pendingDataUrl = ''; toast(err.message); }
-  });
   $('#galForm')?.addEventListener('submit', async e => {
     e.preventDefault();
-    if (!pendingDataUrl) return toast('Choose a photo first');
+    const file = $('#galFile')?.files?.[0];
+    if (!file) return toast('Choose a photo or video');
     const fd = new FormData(e.target);
     const btn = $('#galSubmit');
     if (btn) { btn.disabled = true; btn.textContent = 'Uploading…'; }
     try {
-      await api('/api/admin/gallery', {
-        method: 'POST',
-        body: JSON.stringify({
-          title: fd.get('title') || '',
-          caption: fd.get('caption') || '',
-          image_url: pendingDataUrl
-        })
+      await uploadFormFile('/api/admin/gallery/upload', file, {
+        title: fd.get('title') || '',
+        caption: fd.get('caption') || ''
       });
-      toast('Photo added');
+      toast('Uploaded');
       loadDashTab('gallery');
       loadGalleryPublic();
     } catch (err) { toast(err.message); }
-    finally { if (btn) { btn.disabled = false; btn.textContent = 'Upload photo'; } }
+    finally { if (btn) { btn.disabled = false; btn.textContent = 'Upload'; } }
   });
   host.querySelectorAll('[data-del]').forEach(btn => {
     btn.addEventListener('click', async () => {
-      if (!confirm('Delete this photo?')) return;
+      if (!confirm('Delete this item?')) return;
       try {
         await api(`/api/admin/gallery/${encodeURIComponent(btn.dataset.del)}`, { method: 'DELETE' });
         loadDashTab('gallery');
@@ -1003,16 +991,17 @@ async function renderProfile(host) {
   $('#avatarFile')?.addEventListener('change', async e => {
     const file = e.target.files?.[0];
     if (!file) return;
+    if (!file.type.startsWith('image/')) return toast('Choose a photo');
     try {
-      toast('Preparing photo…');
-      const dataUrl = await readImageFileAsDataUrl(file, 500, 0.75);
-      const field = $('#avatarUrlField');
-      if (field) field.value = dataUrl;
+      toast('Uploading photo…');
+      const updated = await uploadFormFile('/api/profile/avatar', file);
+      user = { ...user, avatarUrl: updated.avatar_url || '' };
       const prev = $('#profileAvatarPreview');
       const fb = $('#profileAvatarFallback');
-      if (prev) { prev.src = dataUrl; prev.classList.remove('hidden'); }
+      if (prev && updated.avatar_url) { prev.src = updated.avatar_url; prev.classList.remove('hidden'); }
       fb?.classList.add('hidden');
-      toast('Photo ready — save profile');
+      setUserAvatarUI(user.fullName || user.email, user.avatarUrl);
+      toast('Photo updated');
     } catch (err) { toast(err.message); }
   });
   $('#clearAvatar')?.addEventListener('click', () => {
@@ -1093,36 +1082,27 @@ function setUserAvatarUI(name, avatarUrl) {
 }
 
 
-function readImageFileAsDataUrl(file, maxSide = 900, quality = 0.72) {
-  return new Promise((resolve, reject) => {
-    if (!file) return reject(new Error('No file selected'));
-    if (!file.type.startsWith('image/')) return reject(new Error('Please choose an image (JPG, PNG, etc.)'));
-    if (file.size > 10 * 1024 * 1024) return reject(new Error('Image must be under 10MB'));
-    const url = URL.createObjectURL(file);
-    const img = new Image();
-    img.onload = () => {
-      try {
-        let w = img.naturalWidth, h = img.naturalHeight;
-        const scale = Math.min(1, maxSide / Math.max(w, h));
-        w = Math.max(1, Math.round(w * scale));
-        h = Math.max(1, Math.round(h * scale));
-        const canvas = document.createElement('canvas');
-        canvas.width = w; canvas.height = h;
-        const ctx = canvas.getContext('2d');
-        ctx.fillStyle = '#fff';
-        ctx.fillRect(0, 0, w, h);
-        ctx.drawImage(img, 0, 0, w, h);
-        URL.revokeObjectURL(url);
-        resolve(canvas.toDataURL('image/jpeg', quality));
-      } catch (e) {
-        URL.revokeObjectURL(url);
-        reject(new Error('Could not process image'));
-      }
-    };
-    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Could not read image')); };
-    img.src = url;
-  });
+function visitorKey() {
+  try {
+    let k = localStorage.getItem('pinnacle_vk');
+    if (!k) {
+      k = 'v_' + Math.random().toString(36).slice(2) + Date.now().toString(36);
+      localStorage.setItem('pinnacle_vk', k);
+    }
+    return k;
+  } catch { return 'anon'; }
 }
+
+async function uploadFormFile(url, file, extra = {}) {
+  const fd = new FormData();
+  fd.append('file', file);
+  Object.entries(extra).forEach(([k, v]) => fd.append(k, v == null ? '' : String(v)));
+  const r = await fetch(url, { method: 'POST', body: fd, credentials: 'same-origin' });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.error || 'Upload failed');
+  return data;
+}
+
 
 function logoInitials(name) {
   const parts = String(name || 'P').trim().split(/\s+/).filter(Boolean);
@@ -1320,9 +1300,83 @@ async function loadGalleryPublic() {
   if (!grid) return;
   try {
     const rows = await api('/api/gallery');
-    grid.innerHTML = rows.length
-      ? rows.map(g => `<article class="gallery-card"><img src="${esc(g.image_url)}" alt="${esc(g.title)}" loading="lazy"><div class="cap"><strong>${esc(g.title || '')}</strong>${esc(g.caption || '')}</div></article>`).join('')
-      : '<div class="empty-state">Gallery photos coming soon.</div>';
+    if (!rows.length) {
+      grid.innerHTML = '<div class="empty-state">Gallery photos and videos coming soon.</div>';
+      return;
+    }
+    grid.innerHTML = rows.map(g => `
+      <article class="gallery-card gallery-item" data-id="${esc(g.id)}">
+        <div class="gal-media">
+          ${g.media_type === 'video'
+            ? `<video src="${esc(g.image_url)}" controls playsinline preload="metadata"></video>`
+            : `<img src="${esc(g.image_url)}" alt="${esc(g.title || 'Gallery')}" loading="lazy">`}
+        </div>
+        <div class="cap">
+          <strong>${esc(g.title || '')}</strong>
+          <p>${esc(g.caption || '')}</p>
+          <div class="gal-actions">
+            <button type="button" class="gal-btn gal-like" data-id="${esc(g.id)}">♥ <span class="like-n">${g.likes || 0}</span></button>
+            <button type="button" class="gal-btn gal-comment-btn" data-id="${esc(g.id)}">💬 <span>${g.comments || 0}</span></button>
+            <a class="gal-btn" href="${esc(g.image_url)}" download target="_blank" rel="noopener">⬇ Download</a>
+          </div>
+          <div class="gal-comments hidden" id="gc-${esc(g.id)}"></div>
+        </div>
+      </article>`).join('');
+
+    grid.querySelectorAll('.gal-like').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        try {
+          const d = await api(`/api/gallery/${encodeURIComponent(btn.dataset.id)}/like`, {
+            method: 'POST',
+            body: JSON.stringify({ visitorKey: visitorKey() })
+          });
+          const n = btn.querySelector('.like-n');
+          if (n) n.textContent = d.likes;
+          btn.classList.add('liked');
+        } catch (e) { toast(e.message); }
+      });
+    });
+
+    grid.querySelectorAll('.gal-comment-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const id = btn.dataset.id;
+        const box = document.getElementById('gc-' + id);
+        if (!box) return;
+        box.classList.toggle('hidden');
+        if (box.classList.contains('hidden')) return;
+        box.innerHTML = '<div class="loading">Loading…</div>';
+        try {
+          const comments = await api(`/api/gallery/${encodeURIComponent(id)}/comments`);
+          box.innerHTML = `
+            <div class="gc-list">${comments.length ? comments.map(c => `
+              <div class="gc-item"><strong>${esc(c.author_name)}</strong> ${esc(c.body)}
+              <div class="meta">${new Date(c.created_at).toLocaleString()}</div></div>`).join('') : '<p class="muted">No comments yet.</p>'}
+            </div>
+            <form class="gc-form" data-id="${esc(id)}">
+              <input name="authorName" placeholder="Your name" maxlength="60">
+              <input name="body" placeholder="Write a comment…" required maxlength="500">
+              <button type="submit" class="btn btn-primary btn-sm">Post</button>
+            </form>`;
+          box.querySelector('.gc-form')?.addEventListener('submit', async e => {
+            e.preventDefault();
+            const f = e.target;
+            try {
+              await api(`/api/gallery/${encodeURIComponent(id)}/comments`, {
+                method: 'POST',
+                body: JSON.stringify({
+                  authorName: f.authorName.value,
+                  body: f.body.value,
+                  visitorKey: visitorKey()
+                })
+              });
+              f.body.value = '';
+              btn.click(); btn.click(); // refresh
+              toast('Comment posted');
+            } catch (err) { toast(err.message); }
+          });
+        } catch (e) { box.innerHTML = `<p class="muted">${esc(e.message)}</p>`; }
+      });
+    });
   } catch {
     grid.innerHTML = '<div class="empty-state">Gallery unavailable.</div>';
   }

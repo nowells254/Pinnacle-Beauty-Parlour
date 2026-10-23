@@ -482,3 +482,24 @@ input[type=file] {
   border: 1px dashed var(--line); border-radius: 10px;
   background: #faf7f8; cursor: pointer;
 }
+
+.gallery-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 18px; }
+.gallery-card { border-radius: 16px; overflow: hidden; border: 1px solid var(--line); background: #fff; box-shadow: 0 8px 24px #391b310c; }
+.gallery-card .gal-media { background: #111; aspect-ratio: 1; display: grid; place-items: center; overflow: hidden; }
+.gallery-card .gal-media img, .gallery-card .gal-media video {
+  width: 100%; height: 100%; object-fit: cover; display: block;
+}
+.gallery-card .cap { padding: 12px 14px 14px; }
+.gallery-card .cap p { margin: 4px 0 10px; color: var(--muted); font-size: .88rem; }
+.gal-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.gal-btn {
+  border: 1px solid var(--line); background: #faf7f8; color: var(--plum);
+  border-radius: 999px; padding: 6px 12px; font-size: 12px; font-weight: 700;
+  cursor: pointer; text-decoration: none;
+}
+.gal-btn.liked { background: #fde8ec; border-color: var(--rose); color: var(--rose); }
+.gal-comments { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 10px; }
+.gc-item { font-size: .88rem; margin-bottom: 8px; }
+.gc-form { display: grid; gap: 8px; margin-top: 10px; }
+.gc-form input { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+.gal-meta { font-size: .78rem; color: var(--muted); margin-top: 4px; }
