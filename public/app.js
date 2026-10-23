@@ -744,10 +744,13 @@ async function renderAdminGallery(host) {
   const rows = await api('/api/admin/gallery');
   host.innerHTML = `
     <form id="galForm" class="service-form" style="margin-bottom:16px">
-      <label>Title<input name="title" placeholder="Style name"></label>
+      <label>Title<input name="title" placeholder="Style name (optional)"></label>
       <label>Caption<input name="caption" placeholder="Optional note"></label>
-      <label>Image URL<input name="image_url" required placeholder="https://…"></label>
-      <button type="submit" class="btn btn-primary btn-sm">Add photo</button>
+      <label>Photo from your device
+        <input type="file" id="galFile" accept="image/*" required>
+      </label>
+      <div id="galPreviewWrap" class="upload-preview hidden"><img id="galPreview" alt="Preview"></div>
+      <button type="submit" class="btn btn-primary btn-sm" id="galSubmit">Upload photo</button>
     </form>
     <div class="gallery-grid">
       ${rows.length ? rows.map(g => `
@@ -756,17 +759,42 @@ async function renderAdminGallery(host) {
           <div class="cap"><strong>${esc(g.title || 'Photo')}</strong>${esc(g.caption || '')}
             <button type="button" class="btn-sm btn-delete" data-del="${esc(g.id)}" style="margin-top:8px">Delete</button>
           </div>
-        </article>`).join('') : '<div class="empty">No gallery photos yet. Add image URLs above.</div>'}
+        </article>`).join('') : '<div class="empty">No gallery photos yet. Upload from your phone or computer.</div>'}
     </div>`;
+  let pendingDataUrl = '';
+  $('#galFile')?.addEventListener('change', async e => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      toast('Preparing photo…');
+      pendingDataUrl = await readImageFileAsDataUrl(file, 1000, 0.7);
+      const wrap = $('#galPreviewWrap');
+      const img = $('#galPreview');
+      if (img) img.src = pendingDataUrl;
+      wrap?.classList.remove('hidden');
+      toast('Photo ready — tap Upload');
+    } catch (err) { pendingDataUrl = ''; toast(err.message); }
+  });
   $('#galForm')?.addEventListener('submit', async e => {
     e.preventDefault();
+    if (!pendingDataUrl) return toast('Choose a photo first');
     const fd = new FormData(e.target);
+    const btn = $('#galSubmit');
+    if (btn) { btn.disabled = true; btn.textContent = 'Uploading…'; }
     try {
-      await api('/api/admin/gallery', { method: 'POST', body: JSON.stringify(Object.fromEntries(fd)) });
+      await api('/api/admin/gallery', {
+        method: 'POST',
+        body: JSON.stringify({
+          title: fd.get('title') || '',
+          caption: fd.get('caption') || '',
+          image_url: pendingDataUrl
+        })
+      });
       toast('Photo added');
       loadDashTab('gallery');
       loadGalleryPublic();
     } catch (err) { toast(err.message); }
+    finally { if (btn) { btn.disabled = false; btn.textContent = 'Upload photo'; } }
   });
   host.querySelectorAll('[data-del]').forEach(btn => {
     btn.addEventListener('click', async () => {
@@ -955,8 +983,12 @@ async function renderProfile(host) {
         <img id="profileAvatarPreview" class="profile-avatar-preview ${p.avatar_url ? '' : 'hidden'}" src="${esc(p.avatar_url || '')}" alt="">
         <div class="dash-avatar" id="profileAvatarFallback">${esc(logoInitials(p.full_name || p.email || 'U'))}</div>
       </div>
-      <label>Profile photo URL<input name="avatarUrl" value="${esc(p.avatar_url || '')}" placeholder="https://… (link to your photo)"></label>
-      <p class="muted">Paste a photo link (Imgur, Google Drive public link, etc.). Leave blank for initials.</p>
+      <label>Profile photo
+        <input type="file" id="avatarFile" accept="image/*">
+      </label>
+      <input type="hidden" name="avatarUrl" id="avatarUrlField" value="${esc(p.avatar_url || '')}">
+      <p class="muted">Choose a photo from your phone or computer. Leave empty to keep initials.</p>
+      <button type="button" class="btn btn-outline btn-sm" id="clearAvatar">Remove photo</button>
       <label>Full name<input name="fullName" value="${esc(p.full_name || '')}" required></label>
       <label>Email<input name="email" type="email" value="${esc(p.email || '')}" required></label>
       <label>Phone<input name="phone" value="${esc(p.phone || '')}"></label>
@@ -968,6 +1000,28 @@ async function renderProfile(host) {
       <button type="submit" class="btn btn-primary btn-sm">Save profile</button>
       <button type="button" class="btn btn-outline btn-sm" id="logoutBtn" style="margin-top:8px">Sign out</button>
     </form>`;
+  $('#avatarFile')?.addEventListener('change', async e => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      toast('Preparing photo…');
+      const dataUrl = await readImageFileAsDataUrl(file, 500, 0.75);
+      const field = $('#avatarUrlField');
+      if (field) field.value = dataUrl;
+      const prev = $('#profileAvatarPreview');
+      const fb = $('#profileAvatarFallback');
+      if (prev) { prev.src = dataUrl; prev.classList.remove('hidden'); }
+      fb?.classList.add('hidden');
+      toast('Photo ready — save profile');
+    } catch (err) { toast(err.message); }
+  });
+  $('#clearAvatar')?.addEventListener('click', () => {
+    const field = $('#avatarUrlField');
+    if (field) field.value = '';
+    if ($('#avatarFile')) $('#avatarFile').value = '';
+    $('#profileAvatarPreview')?.classList.add('hidden');
+    $('#profileAvatarFallback')?.classList.remove('hidden');
+  });
   $('#profileForm').addEventListener('submit', async e => {
     e.preventDefault();
     const fd = new FormData(e.target);
@@ -1036,6 +1090,38 @@ function setUserAvatarUI(name, avatarUrl) {
       fallback.textContent = logoInitials(name || 'U');
     }
   }
+}
+
+
+function readImageFileAsDataUrl(file, maxSide = 900, quality = 0.72) {
+  return new Promise((resolve, reject) => {
+    if (!file) return reject(new Error('No file selected'));
+    if (!file.type.startsWith('image/')) return reject(new Error('Please choose an image (JPG, PNG, etc.)'));
+    if (file.size > 10 * 1024 * 1024) return reject(new Error('Image must be under 10MB'));
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      try {
+        let w = img.naturalWidth, h = img.naturalHeight;
+        const scale = Math.min(1, maxSide / Math.max(w, h));
+        w = Math.max(1, Math.round(w * scale));
+        h = Math.max(1, Math.round(h * scale));
+        const canvas = document.createElement('canvas');
+        canvas.width = w; canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#fff';
+        ctx.fillRect(0, 0, w, h);
+        ctx.drawImage(img, 0, 0, w, h);
+        URL.revokeObjectURL(url);
+        resolve(canvas.toDataURL('image/jpeg', quality));
+      } catch (e) {
+        URL.revokeObjectURL(url);
+        reject(new Error('Could not process image'));
+      }
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Could not read image')); };
+    img.src = url;
+  });
 }
 
 function logoInitials(name) {

@@ -471,3 +471,14 @@ body.theme-dark .conv-list { background: #1a1520; }
 .terms-body { font-size: .95rem; line-height: 1.55; color: var(--ink); margin: 12px 0 20px; text-align: left; }
 .terms-body ul { padding-left: 1.2rem; margin: 10px 0; }
 .terms-body li { margin: 6px 0; }
+
+.upload-preview { margin: 8px 0; }
+.upload-preview img {
+  max-width: 100%; max-height: 200px; border-radius: 12px;
+  border: 1px solid var(--line); object-fit: cover;
+}
+input[type=file] {
+  display: block; width: 100%; padding: 10px;
+  border: 1px dashed var(--line); border-radius: 10px;
+  background: #faf7f8; cursor: pointer;
+}

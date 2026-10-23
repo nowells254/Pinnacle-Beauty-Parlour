@@ -1,4 +1,4 @@
-const CACHE = 'pinnacle-shell-v12';
+const CACHE = 'pinnacle-shell-v14';
 self.addEventListener('install', e => { self.skipWaiting(); });
 self.addEventListener('activate', e => {
   e.waitUntil(
