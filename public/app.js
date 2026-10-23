@@ -1107,7 +1107,10 @@ function bindEvents() {
   
   $('#appHomeLogin')?.addEventListener('click', () => openAuth('login'));
   $('#appHomeSignup')?.addEventListener('click', () => openAuth('signup'));
-  $('#appHomeToWeb')?.addEventListener('click', goToWebsite);
+  $('#appHomeForgot')?.addEventListener('click', () => openAuth('forgot'));
+  $('#appHomeTerms')?.addEventListener('click', () => $('#termsModal')?.classList.remove('hidden'));
+  $('#termsClose')?.addEventListener('click', () => $('#termsModal')?.classList.add('hidden'));
+  $('#termsOk')?.addEventListener('click', () => $('#termsModal')?.classList.add('hidden'));
 
   $('#loginNavBtn')?.addEventListener('click', () => openAuth('login'));
   $('#signupNavBtn')?.addEventListener('click', () => openAuth('signup'));

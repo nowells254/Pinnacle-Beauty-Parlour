@@ -27,9 +27,34 @@
         <button type="button" class="btn btn-outline btn-lg" id="appHomeSignup">Create account</button>
       </div>
       <p class="app-home-hint">Clients book and chat here. Staff manage bookings from the dashboard.</p>
-      <button type="button" class="text-link" id="appHomeToWeb">View public website →</button>
+      <div class="app-home-links">
+        <button type="button" class="text-link" id="appHomeForgot">Forgot password?</button>
+        <span class="app-home-dot">·</span>
+        <button type="button" class="text-link" id="appHomeTerms">Terms of service</button>
+      </div>
     </div>
   </section>
+
+  <!-- Terms modal -->
+  <div id="termsModal" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modal-card">
+      <button class="modal-close" id="termsClose" aria-label="Close">×</button>
+      <h2>Terms of service</h2>
+      <div class="terms-body">
+        <p>By creating an account or booking with this salon, you agree to:</p>
+        <ul>
+          <li>Provide accurate contact details for appointment confirmation.</li>
+          <li>Arrive on time or notify the salon if you need to cancel or reschedule.</li>
+          <li>Treat staff and other clients with respect.</li>
+          <li>Allow the salon to contact you about your bookings via the app, WhatsApp, SMS, or call.</li>
+        </ul>
+        <p>Your personal data is used only to manage bookings, messages, and service quality. You may update or request deletion of your account data by contacting the salon admin.</p>
+        <p class="muted">These terms may be updated by the salon owner. Continued use of the app means you accept the current terms.</p>
+      </div>
+      <button type="button" class="btn btn-primary btn-block" id="termsOk">I understand</button>
+    </div>
+  </div>
+
 
   <header class="topbar website-only">
     <a class="brand" href="#home" id="brandLink">
