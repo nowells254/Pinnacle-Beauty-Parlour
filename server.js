@@ -115,6 +115,11 @@ function requireAuth(req, res, next) {
   req.user = user;
   next();
 }
+function optionalAuth(req, res, next) {
+  const user = verifyToken(getCookie(req, 'pinnacle_session'));
+  if (user && user.id) req.user = user;
+  next();
+}
 function requireAdmin(req, res, next) {
   const user = verifyToken(getCookie(req, 'pinnacle_session'));
   if (!user || user.role !== 'admin') return res.status(401).json({ error: 'Please sign in as the salon owner.' });
@@ -1047,11 +1052,21 @@ app.post('/api/gallery/:id/like', asyncRoute(async (req, res) => {
   res.json({ likes: c.rows[0].n });
 }));
 
-app.post('/api/gallery/:id/comments', asyncRoute(async (req, res) => {
+app.post('/api/gallery/:id/comments', optionalAuth, asyncRoute(async (req, res) => {
   const id = cleanText(req.params.id, 30);
   const body = cleanText(req.body.body, 500);
-  const author = cleanText(req.body.authorName || 'Guest', 60) || 'Guest';
-  const key = cleanText(req.body.visitorKey || '', 80);
+  // Prefer signed-in account name so clients never show as Guest
+  let author = '';
+  if (req.user) {
+    author = cleanText(req.user.fullName || req.user.email || '', 60);
+    if (!author) {
+      const u = await pool.query('SELECT full_name, email FROM users WHERE id=$1', [req.user.id]);
+      if (u.rowCount) author = cleanText(u.rows[0].full_name || u.rows[0].email || '', 60);
+    }
+  }
+  if (!author) author = cleanText(req.body.authorName || '', 60);
+  if (!author) author = 'Guest';
+  const key = cleanText(req.body.visitorKey || (req.user && req.user.id) || '', 80);
   if (body.length < 1) return res.status(400).json({ error: 'Comment cannot be empty.' });
   const exists = await pool.query('SELECT 1 FROM gallery WHERE id=$1 AND active=TRUE', [id]);
   if (!exists.rowCount) return res.status(404).json({ error: 'Not found.' });

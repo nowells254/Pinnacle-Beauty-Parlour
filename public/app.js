@@ -1340,10 +1340,11 @@ function openMediaLightbox(url, isVideo, title) {
 }
 
 function commentAuthorName() {
-  if (user && (user.fullName || user.email)) {
-    return String(user.fullName || user.email).trim();
-  }
-  return '';
+  if (!user) return '';
+  const n = String(user.fullName || '').trim();
+  if (n) return n;
+  const e = String(user.email || '').trim();
+  return e;
 }
 
 function bindGalleryCardActions(root) {
@@ -1405,7 +1406,9 @@ function bindGalleryCardActions(root) {
         box.querySelector('.gc-form')?.addEventListener('submit', async ev => {
           ev.preventDefault();
           const f = ev.target;
-          const name = (f.authorName && f.authorName.value) ? f.authorName.value.trim() : (commentAuthorName() || 'Guest');
+          const name = commentAuthorName()
+            || (f.authorName && f.authorName.value ? String(f.authorName.value).trim() : '')
+            || 'Guest';
           try {
             await api(`/api/gallery/${encodeURIComponent(id)}/comments`, {
               method: 'POST',
