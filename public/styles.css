@@ -588,3 +588,6 @@ input[type=file] {
 .status-staff { background: #e8f0fe; color: #1a56db; }
 .status-admin { background: #f3e8ff; color: #6b21a8; }
 .status-client { background: #ecfdf5; color: #047857; }
+
+.svc-by-cat { display: grid; gap: 12px; max-height: 280px; overflow-y: auto; }
+.svc-group strong { display: block; font-size: .8rem; color: var(--muted); margin-bottom: 6px; text-transform: uppercase; letter-spacing: .04em; }

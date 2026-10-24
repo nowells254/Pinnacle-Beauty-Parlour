@@ -367,6 +367,14 @@ async function initDb() {
 
 
   await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url TEXT NOT NULL DEFAULT ''`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS staff_categories TEXT NOT NULL DEFAULT ''`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS staff_services TEXT NOT NULL DEFAULT ''`);
+  try {
+    await pool.query(`ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check`);
+  } catch (e) {}
+  try {
+    await pool.query(`ALTER TABLE users ADD CONSTRAINT users_role_check CHECK (role IN ('client','admin','staff'))`);
+  } catch (e) { console.warn('role check:', e.message); }
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS salon_settings (
@@ -1200,30 +1208,53 @@ app.patch('/api/admin/reviews/:id', requireAdmin, asyncRoute(async (req, res) =>
 
 // —— Staff: service specialists + admins ——
 app.get('/api/admin/staff', requireAdmin, asyncRoute(async (req, res) => {
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS staff_categories TEXT NOT NULL DEFAULT ''`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS staff_services TEXT NOT NULL DEFAULT ''`);
   const r = await pool.query(
-    `SELECT id, email, full_name, phone, role, staff_categories, created_at
+    `SELECT id, email, full_name, phone, role,
+            COALESCE(staff_categories,'') AS staff_categories,
+            COALESCE(staff_services,'') AS staff_services,
+            created_at
      FROM users WHERE role IN ('admin','staff')
      ORDER BY CASE role WHEN 'admin' THEN 0 ELSE 1 END, full_name, created_at`
   );
   const cats = await pool.query(`SELECT DISTINCT category FROM services WHERE active=TRUE ORDER BY category`);
-  res.json({ people: r.rows, categories: cats.rows.map(x => x.category) });
+  const svcs = await pool.query(`SELECT id, category, name FROM services WHERE active=TRUE ORDER BY category, name`);
+  res.json({
+    people: r.rows,
+    categories: cats.rows.map(x => x.category),
+    services: svcs.rows
+  });
 }));
 
 app.post('/api/admin/staff/assign', requireAdmin, asyncRoute(async (req, res) => {
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS staff_categories TEXT NOT NULL DEFAULT ''`);
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS staff_services TEXT NOT NULL DEFAULT ''`);
+  try { await pool.query(`ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check`); } catch (e) {}
+  try { await pool.query(`ALTER TABLE users ADD CONSTRAINT users_role_check CHECK (role IN ('client','admin','staff'))`); } catch (e) {}
+
   const email = cleanText(req.body.email, 200).toLowerCase();
   const role = cleanText(req.body.role || 'staff', 20);
   let categories = req.body.categories;
+  let serviceIds = req.body.services;
   if (typeof categories === 'string') categories = categories.split(',').map(x => x.trim()).filter(Boolean);
+  if (typeof serviceIds === 'string') serviceIds = serviceIds.split(',').map(x => x.trim()).filter(Boolean);
   if (!Array.isArray(categories)) categories = [];
+  if (!Array.isArray(serviceIds)) serviceIds = [];
   categories = categories.map(c => cleanText(String(c), 60)).filter(Boolean);
+  serviceIds = serviceIds.map(c => cleanText(String(c), 50)).filter(Boolean);
+
   if (!validEmail(email)) return res.status(400).json({ error: 'Valid email required. Person must sign up first.' });
   if (!['staff', 'admin'].includes(role)) return res.status(400).json({ error: 'Role must be staff or admin.' });
-  if (role === 'staff' && !categories.length) return res.status(400).json({ error: 'Choose at least one service category for this staff member.' });
+  if (role === 'staff' && !categories.length && !serviceIds.length) {
+    return res.status(400).json({ error: 'Choose at least one service category or specific service.' });
+  }
   const catStr = categories.join(', ');
+  const svcStr = serviceIds.join(',');
   const r = await pool.query(
-    `UPDATE users SET role=$1, staff_categories=$2, updated_at=NOW() WHERE email=$3
-     RETURNING id, email, full_name, phone, role, staff_categories`,
-    [role, catStr, email]
+    `UPDATE users SET role=$1, staff_categories=$2, staff_services=$3, updated_at=NOW() WHERE email=$4
+     RETURNING id, email, full_name, phone, role, staff_categories, staff_services`,
+    [role, catStr, svcStr, email]
   );
   if (!r.rowCount) return res.status(404).json({ error: 'No user with that email. They must create an account first, then you assign them.' });
   res.json(r.rows[0]);

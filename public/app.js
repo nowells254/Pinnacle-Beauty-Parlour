@@ -823,14 +823,25 @@ async function renderAdminReviews(host) {
 }
 
 async function renderStaff(host) {
-  const data = await api('/api/admin/staff');
-  const people = data.people || data || [];
+  let data;
+  try {
+    data = await api('/api/admin/staff');
+  } catch (e) {
+    host.innerHTML = `<div class="empty">${esc(e.message || 'Could not load staff.')}</div>`;
+    return;
+  }
+  const people = Array.isArray(data) ? data : (data.people || []);
   const categories = data.categories || [];
+  const services = data.services || [];
+  const byCat = {};
+  services.forEach(sv => {
+    if (!byCat[sv.category]) byCat[sv.category] = [];
+    byCat[sv.category].push(sv);
+  });
+
   host.innerHTML = `
-    <div class="staff-intro">
-      <p class="muted">Add team members by their signup email. Assign the service categories they offer (Hair, Nails, Spa…).</p>
-    </div>
-    <form id="staffForm" class="service-form" style="margin-bottom:20px;max-width:520px">
+    <p class="muted">1) Person creates an account · 2) You enter their email · 3) Tick categories and/or specific services they offer.</p>
+    <form id="staffForm" class="service-form" style="margin-bottom:20px;max-width:560px">
       <label>Staff email (must already have an account)
         <input name="email" type="email" required placeholder="stylist@email.com">
       </label>
@@ -841,44 +852,65 @@ async function renderStaff(host) {
         </select>
       </label>
       <fieldset class="cat-fieldset">
-        <legend>Service categories they handle</legend>
+        <legend>Service categories</legend>
         <div class="cat-checks">
           ${categories.length ? categories.map(c => `
             <label class="cat-check"><input type="checkbox" name="cat" value="${esc(c)}"> ${esc(c)}</label>
-          `).join('') : '<p class="muted">No active service categories yet. Add services first.</p>'}
+          `).join('') : '<p class="muted">Add services first so categories appear.</p>'}
+        </div>
+      </fieldset>
+      <fieldset class="cat-fieldset">
+        <legend>Specific services (optional)</legend>
+        <div class="svc-by-cat">
+          ${Object.keys(byCat).length ? Object.keys(byCat).map(cat => `
+            <div class="svc-group">
+              <strong>${esc(cat)}</strong>
+              <div class="cat-checks">
+                ${byCat[cat].map(sv => `
+                  <label class="cat-check"><input type="checkbox" name="svc" value="${esc(sv.id)}"> ${esc(sv.name)}</label>
+                `).join('')}
+              </div>
+            </div>`).join('') : '<p class="muted">No services listed yet.</p>'}
         </div>
       </fieldset>
       <button type="submit" class="btn btn-primary btn-sm">Add / update staff</button>
     </form>
     <h3 style="margin:0 0 10px;color:var(--plum)">Team (${people.length})</h3>
     ${people.length ? `<div style="overflow-x:auto"><table class="dash-table">
-      <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Services</th><th></th></tr></thead>
+      <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Categories</th><th>Services</th><th></th></tr></thead>
       <tbody>
-        ${people.map(p => `
-          <tr>
+        ${people.map(p => {
+          const svcIds = String(p.staff_services || '').split(',').filter(Boolean);
+          const svcNames = svcIds.map(id => {
+            const f = services.find(x => x.id === id);
+            return f ? f.name : id;
+          }).join(', ');
+          return `<tr>
             <td>${esc(p.full_name || '—')}</td>
             <td>${esc(p.email)}</td>
             <td><span class="status status-${esc(p.role)}">${esc(p.role)}</span></td>
-            <td>${esc(p.staff_categories || (p.role === 'admin' ? 'All (admin)' : '—'))}</td>
-            <td>
-              ${p.id === (user && user.id) ? '<small class="muted">You</small>' :
-                `<button type="button" class="btn btn-outline btn-sm" data-demote="${esc(p.id)}">Remove</button>`}
-            </td>
-          </tr>`).join('')}
+            <td>${esc(p.staff_categories || (p.role === 'admin' ? 'All' : '—'))}</td>
+            <td>${esc(svcNames || '—')}</td>
+            <td>${p.id === (user && user.id) ? '<small class="muted">You</small>' :
+              `<button type="button" class="btn btn-outline btn-sm" data-demote="${esc(p.id)}">Remove</button>`}</td>
+          </tr>`;
+        }).join('')}
       </tbody>
-    </table></div>` : '<div class="empty">No staff yet. Clients sign up, then you assign them here.</div>'}`;
+    </table></div>` : '<div class="empty">No staff yet. Have them sign up, then assign here.</div>'}`;
 
   $('#staffForm')?.addEventListener('submit', async e => {
     e.preventDefault();
     const fd = new FormData(e.target);
     const cats = [...e.target.querySelectorAll('input[name=cat]:checked')].map(x => x.value);
+    const svcs = [...e.target.querySelectorAll('input[name=svc]:checked')].map(x => x.value);
     try {
       await api('/api/admin/staff/assign', {
         method: 'POST',
         body: JSON.stringify({
           email: fd.get('email'),
           role: fd.get('role'),
-          categories: cats
+          categories: cats,
+          services: svcs
         })
       });
       toast('Staff updated');
@@ -887,7 +919,7 @@ async function renderStaff(host) {
   });
   host.querySelectorAll('[data-demote]').forEach(btn => {
     btn.addEventListener('click', async () => {
-      if (!confirm('Remove this person from staff? They become a normal client again.')) return;
+      if (!confirm('Remove this person from staff? They become a client again.')) return;
       try {
         await api('/api/admin/staff/demote', { method: 'POST', body: JSON.stringify({ userId: btn.dataset.demote }) });
         toast('Removed from staff');
