@@ -1065,11 +1065,15 @@ app.post('/api/gallery/:id/comments', asyncRoute(async (req, res) => {
 }));
 
 app.get('/api/admin/gallery', requireAdmin, asyncRoute(async (req, res) => {
+  // Never select media_data here — it is huge and only needed when streaming /api/media/:id
   const r = await pool.query(`
-    SELECT g.*,
-      (SELECT COUNT(*)::int FROM gallery_likes l WHERE l.gallery_id = g.id) AS likes,
-      (SELECT COUNT(*)::int FROM gallery_comments c WHERE c.gallery_id = g.id) AS comments
-    FROM gallery g ORDER BY g.sort_order, g.created_at DESC`);
+    SELECT g.id, g.title, g.caption, g.image_url, COALESCE(g.media_type,'image') AS media_type,
+           g.mime_type, g.sort_order, g.active, g.created_at,
+           (SELECT COUNT(*)::int FROM gallery_likes l WHERE l.gallery_id = g.id) AS likes,
+           (SELECT COUNT(*)::int FROM gallery_comments c WHERE c.gallery_id = g.id) AS comments,
+           (g.media_data IS NOT NULL) AS has_media
+    FROM gallery g
+    ORDER BY g.sort_order, g.created_at DESC`);
   res.json(r.rows);
 }));
 
