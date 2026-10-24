@@ -990,11 +990,13 @@ app.patch('/api/my/bookings/:id/cancel', requireAuth, asyncRoute(async (req, res
 app.get('/api/admin/stats', requireAdmin, asyncRoute(async (req, res) => {
   const todayParts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone: salon.timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date()).map(x => [x.type, x.value]));
   const today = `${todayParts.year}-${todayParts.month}-${todayParts.day}`;
-  const [pending, todayRows, unread, clients, completed] = await Promise.all([
+  const [pending, todayRows, unread, clients, staff, admins, completed] = await Promise.all([
     pool.query(`SELECT COUNT(*)::int AS c FROM bookings WHERE status='Requested'`),
     pool.query(`SELECT id, customer_name, service_name, appointment_time, status FROM bookings WHERE appointment_date=$1 AND status IN ('Requested','Confirmed') ORDER BY appointment_time`, [today]),
     pool.query(`SELECT COUNT(*)::int AS c FROM messages WHERE to_user_id=$1 AND read=FALSE`, [req.user.id]),
     pool.query(`SELECT COUNT(*)::int AS c FROM users WHERE role='client'`),
+    pool.query(`SELECT COUNT(*)::int AS c FROM users WHERE role='staff'`),
+    pool.query(`SELECT COUNT(*)::int AS c FROM users WHERE role='admin'`),
     pool.query(`SELECT COUNT(*)::int AS c FROM bookings WHERE status='Completed'`)
   ]);
   res.json({
@@ -1002,6 +1004,8 @@ app.get('/api/admin/stats', requireAdmin, asyncRoute(async (req, res) => {
     today: todayRows.rows,
     unreadMessages: unread.rows[0].c,
     clients: clients.rows[0].c,
+    staff: staff.rows[0].c,
+    admins: admins.rows[0].c,
     completed: completed.rows[0].c,
     date: today
   });
@@ -1194,27 +1198,80 @@ app.patch('/api/admin/reviews/:id', requireAdmin, asyncRoute(async (req, res) =>
   res.json(r.rows[0]);
 }));
 
-// —— Staff: list admins + promote client to admin ——
+// —— Staff: service specialists + admins ——
 app.get('/api/admin/staff', requireAdmin, asyncRoute(async (req, res) => {
-  const r = await pool.query(`SELECT id, email, full_name, phone, role, created_at FROM users WHERE role='admin' ORDER BY created_at`);
-  res.json(r.rows);
+  const r = await pool.query(
+    `SELECT id, email, full_name, phone, role, staff_categories, created_at
+     FROM users WHERE role IN ('admin','staff')
+     ORDER BY CASE role WHEN 'admin' THEN 0 ELSE 1 END, full_name, created_at`
+  );
+  const cats = await pool.query(`SELECT DISTINCT category FROM services WHERE active=TRUE ORDER BY category`);
+  res.json({ people: r.rows, categories: cats.rows.map(x => x.category) });
+}));
+
+app.post('/api/admin/staff/assign', requireAdmin, asyncRoute(async (req, res) => {
+  const email = cleanText(req.body.email, 200).toLowerCase();
+  const role = cleanText(req.body.role || 'staff', 20);
+  let categories = req.body.categories;
+  if (typeof categories === 'string') categories = categories.split(',').map(x => x.trim()).filter(Boolean);
+  if (!Array.isArray(categories)) categories = [];
+  categories = categories.map(c => cleanText(String(c), 60)).filter(Boolean);
+  if (!validEmail(email)) return res.status(400).json({ error: 'Valid email required. Person must sign up first.' });
+  if (!['staff', 'admin'].includes(role)) return res.status(400).json({ error: 'Role must be staff or admin.' });
+  if (role === 'staff' && !categories.length) return res.status(400).json({ error: 'Choose at least one service category for this staff member.' });
+  const catStr = categories.join(', ');
+  const r = await pool.query(
+    `UPDATE users SET role=$1, staff_categories=$2, updated_at=NOW() WHERE email=$3
+     RETURNING id, email, full_name, phone, role, staff_categories`,
+    [role, catStr, email]
+  );
+  if (!r.rowCount) return res.status(404).json({ error: 'No user with that email. They must create an account first, then you assign them.' });
+  res.json(r.rows[0]);
+}));
+
+app.patch('/api/admin/staff/:id', requireAdmin, asyncRoute(async (req, res) => {
+  const id = cleanText(req.params.id, 30);
+  let categories = req.body.categories;
+  if (typeof categories === 'string') categories = categories.split(',').map(x => x.trim()).filter(Boolean);
+  if (!Array.isArray(categories)) categories = [];
+  categories = categories.map(c => cleanText(String(c), 60)).filter(Boolean);
+  const catStr = categories.join(', ');
+  const r = await pool.query(
+    `UPDATE users SET staff_categories=$1, updated_at=NOW() WHERE id=$2 AND role IN ('staff','admin')
+     RETURNING id, email, full_name, role, staff_categories`,
+    [catStr, id]
+  );
+  if (!r.rowCount) return res.status(404).json({ error: 'Staff member not found.' });
+  res.json(r.rows[0]);
 }));
 
 app.post('/api/admin/staff/promote', requireAdmin, asyncRoute(async (req, res) => {
+  // legacy: promote to admin
   const email = cleanText(req.body.email, 200).toLowerCase();
   if (!validEmail(email)) return res.status(400).json({ error: 'Valid email required.' });
-  const r = await pool.query(`UPDATE users SET role='admin', updated_at=NOW() WHERE email=$1 RETURNING id,email,full_name,role`, [email]);
+  const r = await pool.query(
+    `UPDATE users SET role='admin', updated_at=NOW() WHERE email=$1 RETURNING id,email,full_name,role,staff_categories`,
+    [email]
+  );
   if (!r.rowCount) return res.status(404).json({ error: 'No user with that email. They must sign up first.' });
   res.json(r.rows[0]);
 }));
 
 app.post('/api/admin/staff/demote', requireAdmin, asyncRoute(async (req, res) => {
   const id = cleanText(req.body.userId, 30);
-  if (id === req.user.id) return res.status(400).json({ error: 'You cannot demote yourself.' });
-  const admins = await pool.query(`SELECT COUNT(*)::int AS c FROM users WHERE role='admin'`);
-  if (admins.rows[0].c <= 1) return res.status(400).json({ error: 'Keep at least one admin.' });
-  const r = await pool.query(`UPDATE users SET role='client', updated_at=NOW() WHERE id=$1 AND role='admin' RETURNING id,email,role`, [id]);
-  if (!r.rowCount) return res.status(404).json({ error: 'Admin not found.' });
+  if (id === req.user.id) return res.status(400).json({ error: 'You cannot remove yourself.' });
+  const target = await pool.query(`SELECT role FROM users WHERE id=$1`, [id]);
+  if (!target.rowCount) return res.status(404).json({ error: 'User not found.' });
+  if (target.rows[0].role === 'admin') {
+    const admins = await pool.query(`SELECT COUNT(*)::int AS c FROM users WHERE role='admin'`);
+    if (admins.rows[0].c <= 1) return res.status(400).json({ error: 'Keep at least one admin.' });
+  }
+  const r = await pool.query(
+    `UPDATE users SET role='client', staff_categories='', updated_at=NOW() WHERE id=$1 AND role IN ('admin','staff')
+     RETURNING id,email,role`,
+    [id]
+  );
+  if (!r.rowCount) return res.status(404).json({ error: 'Staff not found.' });
   res.json(r.rows[0]);
 }));
 

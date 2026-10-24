@@ -720,7 +720,13 @@ async function renderOverview(host) {
       <div class="stat-card"><strong>${st.pending}</strong><span>Pending requests</span></div>
       <div class="stat-card"><strong>${st.today.length}</strong><span>Today's appointments</span></div>
       <div class="stat-card"><strong>${st.unreadMessages}</strong><span>Unread messages</span></div>
-      <div class="stat-card"><strong>${st.clients}</strong><span>Clients</span></div>
+      <button type="button" class="stat-card stat-click" data-goto="clients" title="Open clients">
+        <strong>${st.clients}</strong><span>Clients →</span>
+      </button>
+      <button type="button" class="stat-card stat-click" data-goto="staff" title="Open staff">
+        <strong>${st.staff || 0}</strong><span>Staff →</span>
+      </button>
+      <div class="stat-card"><strong>${st.admins || 0}</strong><span>Admins</span></div>
       <div class="stat-card"><strong>${st.completed}</strong><span>Completed</span></div>
     </div>
     <h3 style="margin:8px 0 10px;color:var(--plum)">Today · ${esc(st.date)}</h3>
@@ -731,7 +737,16 @@ async function renderOverview(host) {
       <a class="btn btn-outline btn-sm" href="/api/admin/bookings/export" target="_blank" rel="noopener">Export bookings CSV</a>
       <button type="button" class="btn btn-outline btn-sm" id="runReminders">Run tomorrow reminders</button>
     </div>
-    <p class="muted" style="margin-top:8px">Reminders log to the server (or REMINDER_WEBHOOK if set).</p>`;
+    <p class="muted" style="margin-top:8px">Tap Clients or Staff counts to open those lists. Reminders use REMINDER_WEBHOOK if set.</p>`;
+  host.querySelectorAll('[data-goto]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const tab = btn.dataset.goto;
+      document.querySelectorAll('.dash-tab').forEach(x => {
+        x.classList.toggle('active', x.dataset.tab === tab);
+      });
+      loadDashTab(tab);
+    });
+  });
   $('#runReminders')?.addEventListener('click', async () => {
     try {
       const d = await api('/api/admin/reminders/run', { method: 'POST' });
@@ -808,34 +823,74 @@ async function renderAdminReviews(host) {
 }
 
 async function renderStaff(host) {
-  const rows = await api('/api/admin/staff');
+  const data = await api('/api/admin/staff');
+  const people = data.people || data || [];
+  const categories = data.categories || [];
   host.innerHTML = `
-    <p class="muted">Promote an existing client account to staff/admin by email.</p>
-    <form id="promoteForm" class="service-form" style="margin-bottom:16px">
-      <label>Client email<input name="email" type="email" required placeholder="staff@email.com"></label>
-      <button type="submit" class="btn btn-primary btn-sm">Promote to admin</button>
+    <div class="staff-intro">
+      <p class="muted">Add team members by their signup email. Assign the service categories they offer (Hair, Nails, Spa…).</p>
+    </div>
+    <form id="staffForm" class="service-form" style="margin-bottom:20px;max-width:520px">
+      <label>Staff email (must already have an account)
+        <input name="email" type="email" required placeholder="stylist@email.com">
+      </label>
+      <label>Role
+        <select name="role">
+          <option value="staff">Staff (service specialist)</option>
+          <option value="admin">Admin (full access)</option>
+        </select>
+      </label>
+      <fieldset class="cat-fieldset">
+        <legend>Service categories they handle</legend>
+        <div class="cat-checks">
+          ${categories.length ? categories.map(c => `
+            <label class="cat-check"><input type="checkbox" name="cat" value="${esc(c)}"> ${esc(c)}</label>
+          `).join('') : '<p class="muted">No active service categories yet. Add services first.</p>'}
+        </div>
+      </fieldset>
+      <button type="submit" class="btn btn-primary btn-sm">Add / update staff</button>
     </form>
-    <table class="dash-table"><thead><tr><th>Name</th><th>Email</th><th>Role</th><th></th></tr></thead>
-    <tbody>${rows.map(u => `
-      <tr>
-        <td>${esc(u.full_name)}</td>
-        <td>${esc(u.email)}</td>
-        <td>${esc(u.role)}</td>
-        <td>${u.id !== user.id ? `<button class="btn-sm btn-cancel" data-demote="${esc(u.id)}">Demote</button>` : 'You'}</td>
-      </tr>`).join('')}</tbody></table>`;
-  $('#promoteForm')?.addEventListener('submit', async e => {
+    <h3 style="margin:0 0 10px;color:var(--plum)">Team (${people.length})</h3>
+    ${people.length ? `<div style="overflow-x:auto"><table class="dash-table">
+      <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Services</th><th></th></tr></thead>
+      <tbody>
+        ${people.map(p => `
+          <tr>
+            <td>${esc(p.full_name || '—')}</td>
+            <td>${esc(p.email)}</td>
+            <td><span class="status status-${esc(p.role)}">${esc(p.role)}</span></td>
+            <td>${esc(p.staff_categories || (p.role === 'admin' ? 'All (admin)' : '—'))}</td>
+            <td>
+              ${p.id === (user && user.id) ? '<small class="muted">You</small>' :
+                `<button type="button" class="btn btn-outline btn-sm" data-demote="${esc(p.id)}">Remove</button>`}
+            </td>
+          </tr>`).join('')}
+      </tbody>
+    </table></div>` : '<div class="empty">No staff yet. Clients sign up, then you assign them here.</div>'}`;
+
+  $('#staffForm')?.addEventListener('submit', async e => {
     e.preventDefault();
+    const fd = new FormData(e.target);
+    const cats = [...e.target.querySelectorAll('input[name=cat]:checked')].map(x => x.value);
     try {
-      await api('/api/admin/staff/promote', { method: 'POST', body: JSON.stringify({ email: e.target.email.value }) });
-      toast('Promoted');
+      await api('/api/admin/staff/assign', {
+        method: 'POST',
+        body: JSON.stringify({
+          email: fd.get('email'),
+          role: fd.get('role'),
+          categories: cats
+        })
+      });
+      toast('Staff updated');
       loadDashTab('staff');
     } catch (err) { toast(err.message); }
   });
   host.querySelectorAll('[data-demote]').forEach(btn => {
     btn.addEventListener('click', async () => {
-      if (!confirm('Demote this admin to client?')) return;
+      if (!confirm('Remove this person from staff? They become a normal client again.')) return;
       try {
         await api('/api/admin/staff/demote', { method: 'POST', body: JSON.stringify({ userId: btn.dataset.demote }) });
+        toast('Removed from staff');
         loadDashTab('staff');
       } catch (e) { toast(e.message); }
     });

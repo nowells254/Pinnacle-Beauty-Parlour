@@ -575,3 +575,16 @@ input[type=file] {
   max-width: 360px; text-align: center; line-height: 1.5;
 }
 .lb-error strong { color: #fff; }
+
+.stat-click {
+  cursor: pointer; border: 1px solid var(--line); text-align: left;
+  font: inherit; width: 100%;
+}
+.stat-click:hover { border-color: var(--rose); background: #fff; box-shadow: 0 8px 20px #391b3110; }
+.cat-fieldset { border: 1px solid var(--line); border-radius: 12px; padding: 12px; margin: 8px 0 12px; }
+.cat-fieldset legend { padding: 0 6px; font-weight: 700; font-size: .85rem; color: var(--plum); }
+.cat-checks { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; }
+.cat-check { display: flex; align-items: center; gap: 8px; font-size: .88rem; font-weight: 600; cursor: pointer; }
+.status-staff { background: #e8f0fe; color: #1a56db; }
+.status-admin { background: #f3e8ff; color: #6b21a8; }
+.status-client { background: #ecfdf5; color: #047857; }
